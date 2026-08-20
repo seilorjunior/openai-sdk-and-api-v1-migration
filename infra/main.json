@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "16507307055826049276"
+      "templateHash": "4921534655786634980"
     }
   },
   "parameters": {
@@ -40,6 +40,98 @@
       "defaultValue": "OpenAI SDK migration POC",
       "metadata": {
         "description": "Publisher organization shown by API Management."
+      }
+    },
+    "modelName": {
+      "type": "string",
+      "defaultValue": "gpt-4.1-mini",
+      "metadata": {
+        "description": "Azure OpenAI model name."
+      }
+    },
+    "modelVersion": {
+      "type": "string",
+      "defaultValue": "2025-04-14",
+      "metadata": {
+        "description": "Azure OpenAI model version."
+      }
+    },
+    "modelDeploymentSku": {
+      "type": "string",
+      "defaultValue": "GlobalStandard",
+      "metadata": {
+        "description": "Azure OpenAI deployment SKU."
+      }
+    },
+    "modelDeploymentCapacity": {
+      "type": "int",
+      "defaultValue": 10,
+      "minValue": 1,
+      "metadata": {
+        "description": "Azure OpenAI deployment capacity."
+      }
+    },
+    "apimSkuName": {
+      "type": "string",
+      "defaultValue": "Developer",
+      "metadata": {
+        "description": "API Management SKU."
+      }
+    },
+    "apimCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 0,
+      "metadata": {
+        "description": "API Management capacity. Consumption uses zero; dedicated SKUs use one or more units."
+      }
+    },
+    "rateLimitCallsPerMinute": {
+      "type": "int",
+      "defaultValue": 60,
+      "minValue": 1,
+      "metadata": {
+        "description": "Maximum requests per subscription or caller IP in each 60-second window."
+      }
+    },
+    "backendRetryCount": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": 0,
+      "metadata": {
+        "description": "Number of APIM retries for transient 5xx backend responses."
+      }
+    },
+    "backendRetryIntervalSeconds": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "metadata": {
+        "description": "Initial delay in seconds between APIM 5xx retries."
+      }
+    },
+    "telemetrySamplingPercentage": {
+      "type": "int",
+      "defaultValue": 100,
+      "minValue": 0,
+      "maxValue": 100,
+      "metadata": {
+        "description": "Percentage of APIM request telemetry sampled into Application Insights."
+      }
+    },
+    "failedRequestsAlertThreshold": {
+      "type": "int",
+      "defaultValue": 5,
+      "minValue": 0,
+      "metadata": {
+        "description": "Failed APIM requests in five minutes required to trigger the alert."
+      }
+    },
+    "alertEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Alert recipient. Defaults to the APIM publisher email when empty."
       }
     },
     "telemetryReaderPrincipalId": {
@@ -81,7 +173,10 @@
   "variables": {
     "resourceGroupName": "[format('rg-{0}', parameters('environmentName'))]",
     "resourceToken": "[uniqueString(subscription().id, parameters('location'), parameters('environmentName'))]",
-    "apimResourceToken": "[uniqueString(subscription().id, parameters('apimLocation'), parameters('environmentName'))]"
+    "apimResourceToken": "[uniqueString(subscription().id, parameters('apimLocation'), parameters('environmentName'))]",
+    "validatedApimSubnetResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('apimSubnetResourceId')))), parameters('apimSubnetResourceId'), fail('apimSubnetResourceId is required when enablePrivateNetworking is true.'))]",
+    "validatedPrivateEndpointSubnetResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('privateEndpointSubnetResourceId')))), parameters('privateEndpointSubnetResourceId'), fail('privateEndpointSubnetResourceId is required when enablePrivateNetworking is true.'))]",
+    "validatedVirtualNetworkResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('virtualNetworkResourceId')))), parameters('virtualNetworkResourceId'), fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.'))]"
   },
   "resources": [
     {
@@ -119,6 +214,40 @@
           "publisherName": {
             "value": "[parameters('publisherName')]"
           },
+          "modelName": {
+            "value": "[parameters('modelName')]"
+          },
+          "modelVersion": {
+            "value": "[parameters('modelVersion')]"
+          },
+          "modelDeploymentSku": {
+            "value": "[parameters('modelDeploymentSku')]"
+          },
+          "modelDeploymentCapacity": {
+            "value": "[parameters('modelDeploymentCapacity')]"
+          },
+          "apimSkuName": {
+            "value": "[parameters('apimSkuName')]"
+          },
+          "apimCapacity": {
+            "value": "[parameters('apimCapacity')]"
+          },
+          "rateLimitCallsPerMinute": {
+            "value": "[parameters('rateLimitCallsPerMinute')]"
+          },
+          "backendRetryCount": {
+            "value": "[parameters('backendRetryCount')]"
+          },
+          "backendRetryIntervalSeconds": {
+            "value": "[parameters('backendRetryIntervalSeconds')]"
+          },
+          "telemetrySamplingPercentage": {
+            "value": "[parameters('telemetrySamplingPercentage')]"
+          },
+          "failedRequestsAlertThreshold": {
+            "value": "[parameters('failedRequestsAlertThreshold')]"
+          },
+          "alertEmail": "[if(empty(parameters('alertEmail')), createObject('value', parameters('publisherEmail')), createObject('value', parameters('alertEmail')))]",
           "resourceToken": {
             "value": "[variables('resourceToken')]"
           },
@@ -129,13 +258,13 @@
             "value": "[parameters('enablePrivateNetworking')]"
           },
           "apimSubnetResourceId": {
-            "value": "[parameters('apimSubnetResourceId')]"
+            "value": "[variables('validatedApimSubnetResourceId')]"
           },
           "privateEndpointSubnetResourceId": {
-            "value": "[parameters('privateEndpointSubnetResourceId')]"
+            "value": "[variables('validatedPrivateEndpointSubnetResourceId')]"
           },
           "virtualNetworkResourceId": {
-            "value": "[parameters('virtualNetworkResourceId')]"
+            "value": "[variables('validatedVirtualNetworkResourceId')]"
           }
         },
         "template": {
@@ -145,7 +274,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "13907294312940917650"
+              "templateHash": "6246762827548830893"
             }
           },
           "parameters": {
@@ -185,6 +314,78 @@
                 "description": "Publisher organization shown by API Management."
               }
             },
+            "modelName": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure OpenAI model name."
+              }
+            },
+            "modelVersion": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure OpenAI model version."
+              }
+            },
+            "modelDeploymentSku": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure OpenAI deployment SKU."
+              }
+            },
+            "modelDeploymentCapacity": {
+              "type": "int",
+              "metadata": {
+                "description": "Azure OpenAI deployment capacity."
+              }
+            },
+            "apimSkuName": {
+              "type": "string",
+              "metadata": {
+                "description": "API Management SKU."
+              }
+            },
+            "apimCapacity": {
+              "type": "int",
+              "metadata": {
+                "description": "API Management capacity."
+              }
+            },
+            "rateLimitCallsPerMinute": {
+              "type": "int",
+              "metadata": {
+                "description": "Maximum requests per subscription or caller IP in each 60-second window."
+              }
+            },
+            "backendRetryCount": {
+              "type": "int",
+              "metadata": {
+                "description": "Number of APIM retries for transient 5xx backend responses."
+              }
+            },
+            "backendRetryIntervalSeconds": {
+              "type": "int",
+              "metadata": {
+                "description": "Initial delay in seconds between APIM 5xx retries."
+              }
+            },
+            "telemetrySamplingPercentage": {
+              "type": "int",
+              "metadata": {
+                "description": "Percentage of APIM request telemetry sampled into Application Insights."
+              }
+            },
+            "failedRequestsAlertThreshold": {
+              "type": "int",
+              "metadata": {
+                "description": "Failed APIM requests in five minutes required to trigger the alert."
+              }
+            },
+            "alertEmail": {
+              "type": "string",
+              "metadata": {
+                "description": "Alert recipient."
+              }
+            },
             "telemetryReaderPrincipalId": {
               "type": "string",
               "defaultValue": "",
@@ -222,8 +423,8 @@
             }
           },
           "variables": {
-            "$fxv#0": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <rate-limit-by-key calls=\"60\" renewal-period=\"60\" counter-key=\"@(context.Subscription?.Key ?? context.Request.IpAddress)\" />\r\n        <set-header name=\"Authorization\" exists-action=\"delete\" />\r\n        <set-variable name=\"migration-api-mode\" value=\"@{ var mode = context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).ToLowerInvariant(); return string.IsNullOrEmpty(mode) ? &quot;default-v1&quot; : (mode == &quot;v1&quot; || mode == &quot;legacy&quot; ? mode : &quot;invalid&quot;); }\" />\r\n        <trace source=\"openai-v1-migration\" severity=\"information\">\r\n            <message>OpenAI migration request routed by API mode.</message>\r\n            <metadata name=\"api_mode\" value=\"@((string)context.Variables[&quot;migration-api-mode&quot;])\" />\r\n            <metadata name=\"request_id\" value=\"@(context.RequestId.ToString())\" />\r\n        </trace>\r\n        <choose>\r\n            <when condition=\"@(string.IsNullOrEmpty(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;)) || context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;v1&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n                <set-backend-service base-url=\"__V1_BACKEND_URL__\" />\r\n                <rewrite-uri template=\"/openai/v1/chat/completions\" copy-unmatched-params=\"false\" />\r\n                <authentication-managed-identity resource=\"https://ai.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n            </when>\r\n            <when condition=\"@(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;legacy&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n                <set-backend-service base-url=\"__LEGACY_BACKEND_URL__\" />\r\n                <rewrite-uri template=\"/openai/deployments/__DEPLOYMENT_NAME__/chat/completions?api-version=2024-10-21\" copy-unmatched-params=\"false\" />\r\n                <authentication-managed-identity resource=\"https://cognitiveservices.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n            </when>\r\n            <otherwise>\r\n                <return-response>\r\n                    <set-status code=\"400\" reason=\"Invalid API mode\" />\r\n                    <set-header name=\"Content-Type\" exists-action=\"override\">\r\n                        <value>application/json</value>\r\n                    </set-header>\r\n                    <set-body>{\"error\":{\"code\":\"invalid_api_mode\",\"message\":\"X-API-Mode must be v1 or legacy when provided.\"}}</set-body>\r\n                </return-response>\r\n            </otherwise>\r\n        </choose>\r\n        <set-header name=\"X-API-Mode\" exists-action=\"delete\" />\r\n    </inbound>\r\n    <backend>\r\n        <retry condition=\"@(context.Response != null &amp;&amp; context.Response.StatusCode &gt;= 500)\" count=\"2\" interval=\"1\" delta=\"1\" max-interval=\"4\" first-fast-retry=\"false\">\r\n            <forward-request buffer-request-body=\"true\" />\r\n        </retry>\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>",
-            "$fxv#1": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <rate-limit-by-key calls=\"60\" renewal-period=\"60\" counter-key=\"@(context.Subscription?.Key ?? context.Request.IpAddress)\" />\r\n        <set-header name=\"Authorization\" exists-action=\"delete\" />\r\n        <rewrite-uri template=\"__BACKEND_PATH__\" copy-unmatched-params=\"false\" />\r\n        <authentication-managed-identity resource=\"https://ai.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n    </inbound>\r\n    <backend>\r\n        <retry condition=\"@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode &gt;= 500))\" count=\"2\" interval=\"1\" delta=\"1\" max-interval=\"4\" first-fast-retry=\"false\">\r\n            <forward-request buffer-request-body=\"true\" />\r\n        </retry>\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>",
+            "$fxv#0": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <rate-limit-by-key calls=\"__RATE_LIMIT_CALLS__\" renewal-period=\"60\" counter-key=\"@(context.Subscription?.Key ?? context.Request.IpAddress)\" />\r\n        <set-header name=\"Authorization\" exists-action=\"delete\" />\r\n        <set-variable name=\"migration-api-mode\" value=\"@{ var mode = context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).ToLowerInvariant(); return string.IsNullOrEmpty(mode) ? &quot;default-v1&quot; : (mode == &quot;v1&quot; || mode == &quot;legacy&quot; ? mode : &quot;invalid&quot;); }\" />\r\n        <trace source=\"openai-v1-migration\" severity=\"information\">\r\n            <message>OpenAI migration request routed by API mode.</message>\r\n            <metadata name=\"api_mode\" value=\"@((string)context.Variables[&quot;migration-api-mode&quot;])\" />\r\n            <metadata name=\"request_id\" value=\"@(context.RequestId.ToString())\" />\r\n        </trace>\r\n        <choose>\r\n            <when condition=\"@(string.IsNullOrEmpty(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;)) || context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;v1&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n                <set-backend-service base-url=\"__V1_BACKEND_URL__\" />\r\n                <rewrite-uri template=\"/openai/v1/chat/completions\" copy-unmatched-params=\"false\" />\r\n                <authentication-managed-identity resource=\"https://ai.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n            </when>\r\n            <when condition=\"@(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;legacy&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n                <set-backend-service base-url=\"__LEGACY_BACKEND_URL__\" />\r\n                <rewrite-uri template=\"/openai/deployments/__DEPLOYMENT_NAME__/chat/completions?api-version=2024-10-21\" copy-unmatched-params=\"false\" />\r\n                <authentication-managed-identity resource=\"https://cognitiveservices.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n            </when>\r\n            <otherwise>\r\n                <return-response>\r\n                    <set-status code=\"400\" reason=\"Invalid API mode\" />\r\n                    <set-header name=\"Content-Type\" exists-action=\"override\">\r\n                        <value>application/json</value>\r\n                    </set-header>\r\n                    <set-body>{\"error\":{\"code\":\"invalid_api_mode\",\"message\":\"X-API-Mode must be v1 or legacy when provided.\"}}</set-body>\r\n                </return-response>\r\n            </otherwise>\r\n        </choose>\r\n        <set-header name=\"X-API-Mode\" exists-action=\"delete\" />\r\n    </inbound>\r\n    <backend>\r\n        <retry condition=\"@(context.Response != null &amp;&amp; context.Response.StatusCode &gt;= 500)\" count=\"__RETRY_COUNT__\" interval=\"__RETRY_INTERVAL__\" delta=\"1\" max-interval=\"4\" first-fast-retry=\"false\">\r\n            <forward-request buffer-request-body=\"true\" />\r\n        </retry>\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>",
+            "$fxv#1": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <rate-limit-by-key calls=\"__RATE_LIMIT_CALLS__\" renewal-period=\"60\" counter-key=\"@(context.Subscription?.Key ?? context.Request.IpAddress)\" />\r\n        <set-header name=\"Authorization\" exists-action=\"delete\" />\r\n        <rewrite-uri template=\"__BACKEND_PATH__\" copy-unmatched-params=\"false\" />\r\n        <authentication-managed-identity resource=\"https://ai.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n    </inbound>\r\n    <backend>\r\n        <retry condition=\"@(context.Response != null &amp;&amp; context.Response.StatusCode &gt;= 500)\" count=\"__RETRY_COUNT__\" interval=\"__RETRY_INTERVAL__\" delta=\"1\" max-interval=\"4\" first-fast-retry=\"false\">\r\n            <forward-request buffer-request-body=\"true\" />\r\n        </retry>\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>",
             "azureOpenAIAccountName": "[format('azai{0}', parameters('resourceToken'))]",
             "azureOpenAIDeploymentName": "[format('azmdl{0}', parameters('resourceToken'))]",
             "managedIdentityName": "[format('azid{0}', parameters('resourceToken'))]",
@@ -235,6 +436,9 @@
             "apimProductId": "[format('migration-{0}', take(parameters('resourceToken'), 12))]",
             "apimSubscriptionId": "[format('migration-{0}', take(parameters('resourceToken'), 12))]",
             "chatOperationId": "[format('azop{0}', parameters('resourceToken'))]",
+            "validatedApimSubnetResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('apimSubnetResourceId')))), parameters('apimSubnetResourceId'), fail('apimSubnetResourceId is required when enablePrivateNetworking is true.'))]",
+            "validatedPrivateEndpointSubnetResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('privateEndpointSubnetResourceId')))), parameters('privateEndpointSubnetResourceId'), fail('privateEndpointSubnetResourceId is required when enablePrivateNetworking is true.'))]",
+            "validatedVirtualNetworkResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('virtualNetworkResourceId')))), parameters('virtualNetworkResourceId'), fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.'))]",
             "operations": [
               {
                 "id": "[variables('chatOperationId')]",
@@ -278,7 +482,8 @@
               }
             ],
             "cognitiveServicesUserRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')]",
-            "monitoringReaderRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')]"
+            "monitoringReaderRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')]",
+            "monitoringMetricsPublisherRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')]"
           },
           "resources": [
             {
@@ -313,7 +518,7 @@
               "location": "[parameters('location')]",
               "properties": {
                 "subnet": {
-                  "id": "[parameters('privateEndpointSubnetResourceId')]"
+                  "id": "[variables('validatedPrivateEndpointSubnetResourceId')]"
                 },
                 "privateLinkServiceConnections": [
                   {
@@ -347,7 +552,7 @@
               "properties": {
                 "registrationEnabled": false,
                 "virtualNetwork": {
-                  "id": "[parameters('virtualNetworkResourceId')]"
+                  "id": "[variables('validatedVirtualNetworkResourceId')]"
                 }
               },
               "dependsOn": [
@@ -379,15 +584,15 @@
               "apiVersion": "2024-10-01",
               "name": "[format('{0}/{1}', variables('azureOpenAIAccountName'), variables('azureOpenAIDeploymentName'))]",
               "sku": {
-                "name": "GlobalStandard",
-                "capacity": 10
+                "name": "[parameters('modelDeploymentSku')]",
+                "capacity": "[parameters('modelDeploymentCapacity')]"
               },
               "properties": {
-                "currentCapacity": 10,
+                "currentCapacity": "[parameters('modelDeploymentCapacity')]",
                 "model": {
                   "format": "OpenAI",
-                  "name": "gpt-4.1-mini",
-                  "version": "2025-04-14"
+                  "name": "[parameters('modelName')]",
+                  "version": "[parameters('modelVersion')]"
                 },
                 "raiPolicyName": "Microsoft.DefaultV2",
                 "versionUpgradeOption": "OnceCurrentVersionExpired"
@@ -413,7 +618,8 @@
               "kind": "web",
               "properties": {
                 "Application_Type": "web",
-                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+                "IngestionMode": "LogAnalytics"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
@@ -440,8 +646,8 @@
               "name": "[variables('apimServiceName')]",
               "location": "[parameters('apimLocation')]",
               "sku": {
-                "name": "Developer",
-                "capacity": 1
+                "name": "[parameters('apimSkuName')]",
+                "capacity": "[parameters('apimCapacity')]"
               },
               "identity": {
                 "type": "UserAssigned",
@@ -449,8 +655,23 @@
                   "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')))]": {}
                 }
               },
-              "properties": "[shallowMerge(createArray(createObject('publisherEmail', parameters('publisherEmail'), 'publisherName', parameters('publisherName'), 'publicNetworkAccess', 'Enabled', 'virtualNetworkType', if(parameters('enablePrivateNetworking'), 'External', 'None')), if(parameters('enablePrivateNetworking'), createObject('virtualNetworkConfiguration', createObject('subnetResourceId', parameters('apimSubnetResourceId'))), createObject()), createObject('customProperties', createObject('Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls11', 'False'))))]",
+              "properties": "[shallowMerge(createArray(createObject('publisherEmail', parameters('publisherEmail'), 'publisherName', parameters('publisherName'), 'publicNetworkAccess', 'Enabled', 'virtualNetworkType', if(parameters('enablePrivateNetworking'), 'External', 'None')), if(parameters('enablePrivateNetworking'), createObject('virtualNetworkConfiguration', createObject('subnetResourceId', variables('validatedApimSubnetResourceId'))), createObject()), createObject('customProperties', createObject('Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls11', 'False'))))]",
               "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]",
+              "name": "[guid(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), variables('monitoringMetricsPublisherRoleId'))]",
+              "properties": {
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[variables('monitoringMetricsPublisherRoleId')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]",
                 "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
               ]
             },
@@ -461,14 +682,17 @@
               "properties": {
                 "loggerType": "applicationInsights",
                 "credentials": {
-                  "instrumentationKey": "[reference(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), '2020-02-02').InstrumentationKey]"
+                  "connectionString": "[reference(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), '2020-02-02').ConnectionString]",
+                  "identityClientId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId]"
                 },
                 "isBuffered": true,
                 "resourceId": "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
-                "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]"
+                "[extensionResourceId(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), variables('monitoringMetricsPublisherRoleId')))]",
+                "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
               ]
             },
             {
@@ -545,7 +769,7 @@
                 "metrics": true,
                 "sampling": {
                   "samplingType": "fixed",
-                  "percentage": 100
+                  "percentage": "[parameters('telemetrySamplingPercentage')]"
                 },
                 "verbosity": "information"
               },
@@ -583,7 +807,7 @@
               "name": "[format('{0}/{1}/{2}/{3}', variables('apimServiceName'), variables('apimApiId'), variables('operations')[copyIndex()].id, 'policy')]",
               "properties": {
                 "format": "rawxml",
-                "value": "[if(equals(variables('operations')[copyIndex()].id, variables('chatOperationId')), replace(replace(replace(replace(variables('$fxv#0'), '__APIM_IDENTITY_CLIENT_ID__', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId), '__DEPLOYMENT_NAME__', variables('azureOpenAIDeploymentName')), '__V1_BACKEND_URL__', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint), '__LEGACY_BACKEND_URL__', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint), replace(replace(variables('$fxv#1'), '__APIM_IDENTITY_CLIENT_ID__', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId), '__BACKEND_PATH__', format('/openai{0}', variables('operations')[copyIndex()].path)))]"
+                "value": "[if(equals(variables('operations')[copyIndex()].id, variables('chatOperationId')), replace(replace(replace(replace(replace(replace(replace(variables('$fxv#0'), '__RATE_LIMIT_CALLS__', string(parameters('rateLimitCallsPerMinute'))), '__RETRY_COUNT__', string(parameters('backendRetryCount'))), '__RETRY_INTERVAL__', string(parameters('backendRetryIntervalSeconds'))), '__APIM_IDENTITY_CLIENT_ID__', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId), '__DEPLOYMENT_NAME__', variables('azureOpenAIDeploymentName')), '__V1_BACKEND_URL__', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint), '__LEGACY_BACKEND_URL__', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint), replace(replace(replace(replace(replace(variables('$fxv#1'), '__RATE_LIMIT_CALLS__', string(parameters('rateLimitCallsPerMinute'))), '__RETRY_COUNT__', string(parameters('backendRetryCount'))), '__RETRY_INTERVAL__', string(parameters('backendRetryIntervalSeconds'))), '__APIM_IDENTITY_CLIENT_ID__', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId), '__BACKEND_PATH__', format('/openai{0}', variables('operations')[copyIndex()].path)))]"
               },
               "dependsOn": [
                 "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]",
@@ -667,7 +891,7 @@
                 "emailReceivers": [
                   {
                     "name": "APIM publisher",
-                    "emailAddress": "[parameters('publisherEmail')]",
+                    "emailAddress": "[parameters('alertEmail')]",
                     "useCommonAlertSchema": true
                   }
                 ]
@@ -695,7 +919,7 @@
                       "metricNamespace": "Microsoft.ApiManagement/service",
                       "metricName": "FailedRequests",
                       "operator": "GreaterThan",
-                      "threshold": 5,
+                      "threshold": "[parameters('failedRequestsAlertThreshold')]",
                       "timeAggregation": "Total",
                       "criterionType": "StaticThresholdCriterion"
                     }

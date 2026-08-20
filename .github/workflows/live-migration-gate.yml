@@ -71,6 +71,12 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -r requirements.txt
+      - name: Validate retirement evidence inputs
+        if: ${{ inputs.target == 'apim' && inputs.enforce_retirement_ready && (inputs.application_insights_name == '' || inputs.resource_group == '') }}
+        shell: bash
+        run: |
+          echo "application_insights_name and resource_group are required when enforce_retirement_ready is true." >&2
+          exit 1
       - uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -92,7 +98,7 @@ jobs:
       - if: ${{ inputs.run_load_test }}
         run: python load_test.py --target ${{ inputs.target }} --api-mode both --requests 10 --concurrency 2
       - name: Generate retirement evidence
-        if: ${{ always() && inputs.target == 'apim' }}
+        if: ${{ always() && inputs.target == 'apim' && inputs.application_insights_name != '' && inputs.resource_group != '' }}
         shell: bash
         run: |
           args=(

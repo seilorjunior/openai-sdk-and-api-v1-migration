@@ -78,6 +78,9 @@ param virtualNetworkResourceId string = ''
 var resourceGroupName = 'rg-${environmentName}'
 var resourceToken = uniqueString(subscription().id, location, environmentName)
 var apimResourceToken = uniqueString(subscription().id, apimLocation, environmentName)
+var validatedApimSubnetResourceId = !enablePrivateNetworking || !empty(apimSubnetResourceId) ? apimSubnetResourceId : fail('apimSubnetResourceId is required when enablePrivateNetworking is true.')
+var validatedPrivateEndpointSubnetResourceId = !enablePrivateNetworking || !empty(privateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : fail('privateEndpointSubnetResourceId is required when enablePrivateNetworking is true.')
+var validatedVirtualNetworkResourceId = !enablePrivateNetworking || !empty(virtualNetworkResourceId) ? virtualNetworkResourceId : fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.')
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
@@ -111,9 +114,9 @@ module resources 'resources.bicep' = {
     resourceToken: resourceToken
     telemetryReaderPrincipalId: telemetryReaderPrincipalId
     enablePrivateNetworking: enablePrivateNetworking
-    apimSubnetResourceId: apimSubnetResourceId
-    privateEndpointSubnetResourceId: privateEndpointSubnetResourceId
-    virtualNetworkResourceId: virtualNetworkResourceId
+    apimSubnetResourceId: validatedApimSubnetResourceId
+    privateEndpointSubnetResourceId: validatedPrivateEndpointSubnetResourceId
+    virtualNetworkResourceId: validatedVirtualNetworkResourceId
   }
 }
 
