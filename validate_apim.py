@@ -41,12 +41,16 @@ UNIFIED_CHAT_POLICY_MARKERS = (
 REDACTED = "***REDACTED***"
 
 # Field/key names that are always treated as secret regardless of value shape,
-# such as backend credential headers, query parameters, and connection secrets.
+# such as backend credential containers and connection secrets. Note that
+# generic names like "header", "query", "parameter", or "authorization" are
+# deliberately NOT included here on their own, since they appear throughout
+# ARM/APIM resources in non-secret contexts (policy metadata, route
+# parameters, etc.). Instead, "credentials" acts as a trigger key: once a
+# dict is reached under a "credentials" key, force_secret propagates to all
+# of its nested content (including any authorization/header/query/parameter
+# fields), so backend credential material is still fully redacted.
 SECRET_FIELD_NAMES = {
-    "authorization",
-    "parameter",
-    "header",
-    "query",
+    "credentials",
     "certificateid",
     "certificateids",
     "clientsecret",
