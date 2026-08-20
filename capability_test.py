@@ -9,7 +9,7 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 
@@ -98,10 +98,11 @@ def tools(client: OpenAI, prompt: str) -> dict[str, Any]:
         max_tokens=100,
     )
     calls = response.choices[0].message.tool_calls or []
+    function_call = cast(Any, calls[0]) if calls and hasattr(calls[0], "function") else None
     return {
         "tool_call_count": len(calls),
-        "tool_name": calls[0].function.name if calls else None,
-        "arguments_valid_json": bool(calls and json.loads(calls[0].function.arguments)),
+        "tool_name": function_call.function.name if function_call else None,
+        "arguments_valid_json": bool(function_call and json.loads(function_call.function.arguments)),
     }
 
 
@@ -147,6 +148,8 @@ def images(client: OpenAI, prompt: str) -> dict[str, Any]:
         prompt=prompt,
         n=1,
     )
+    if not response.data:
+        return {"image_returned": False}
     image = response.data[0]
     return {"image_returned": bool(image.url or image.b64_json)}
 

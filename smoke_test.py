@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal, cast
 
 from azure.ai.inference import ChatCompletionsClient
 from azure.core.exceptions import AzureError
@@ -65,12 +65,12 @@ def client_options(target: str, api_mode: ApiMode | None = None) -> dict[str, ob
 
 
 def build_client(target: str) -> OpenAI:
-    return OpenAI(**client_options(target))
+    return OpenAI(**cast(Any, client_options(target)))
 
 
 def build_chat_client(api_mode: ApiMode | None, target: Target) -> OpenAI | ChatCompletionsClient:
     if target == "apim":
-        return OpenAI(**client_options(target, api_mode))
+        return OpenAI(**cast(Any, client_options(target, api_mode)))
     if api_mode is None:
         raise ValueError("Default API mode can only be tested through APIM.")
     if api_mode == "v1":
@@ -97,16 +97,19 @@ def send_chat(
     of invoke_chat(), which builds a new client every time.
     """
 
-    messages = [{"role": "user", "content": prompt}]
+    messages = cast(Any, [{"role": "user", "content": prompt}])
+    response: Any
     if api_mode == "legacy" and target == "direct":
-        response = client.complete(
+        legacy_client = cast(ChatCompletionsClient, client)
+        response = legacy_client.complete(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
             temperature=0,
         )
     else:
-        response = client.chat.completions.create(
+        v1_client = cast(OpenAI, client)
+        response = v1_client.chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
@@ -133,7 +136,7 @@ def invoke_chat(api_mode: ApiMode | None, target: Target, prompt: str, max_token
 
 
 async def cancellation_probe(target: str, cancel_after_seconds: float) -> bool:
-    client = AsyncOpenAI(**client_options(target))
+    client = AsyncOpenAI(**cast(Any, client_options(target)))
     task = asyncio.create_task(
         client.responses.create(
             model=require_env("AZURE_OPENAI_DEPLOYMENT"),

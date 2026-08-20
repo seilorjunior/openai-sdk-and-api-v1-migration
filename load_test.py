@@ -17,7 +17,7 @@ from typing import Any
 from azure.core.exceptions import AzureError, ServiceRequestError, ServiceResponseError
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
-from smoke_test import ApiMode, build_chat_client, require_env, send_chat
+from smoke_test import ApiMode, Target, build_chat_client, require_env, send_chat
 
 MAX_REQUESTS_PER_MODE = 10_000
 LARGE_LOAD_THRESHOLD = 1_000
@@ -54,7 +54,7 @@ def classify_failure(error: BaseException) -> str:
     return "other"
 
 
-def get_thread_client(target: str, api_mode: ApiMode) -> Any:
+def get_thread_client(target: Target, api_mode: ApiMode) -> Any:
     """Return a client cached on the current worker thread, building it once.
 
     Reusing one client per worker thread (instead of building a new client for
@@ -73,7 +73,7 @@ def get_thread_client(target: str, api_mode: ApiMode) -> Any:
     return client
 
 
-def invoke(target: str, prompt: str, api_mode: ApiMode = "v1") -> dict[str, Any]:
+def invoke(target: Target, prompt: str, api_mode: ApiMode = "v1") -> dict[str, Any]:
     model = require_env("AZURE_OPENAI_DEPLOYMENT")
     client = get_thread_client(target, api_mode)
     started = time.perf_counter()
@@ -93,7 +93,7 @@ def estimate_cost(input_tokens: int, output_tokens: int) -> float | None:
     return input_tokens * float(input_rate) / 1_000_000 + output_tokens * float(output_rate) / 1_000_000
 
 
-def validate_configuration(target: str, modes: tuple[ApiMode, ...]) -> None:
+def validate_configuration(target: Target, modes: tuple[ApiMode, ...]) -> None:
     require_env("AZURE_OPENAI_DEPLOYMENT")
     if target == "apim":
         require_env("APIM_OPENAI_BASE_URL")
@@ -126,16 +126,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_warmup(target: str, api_mode: ApiMode, warmup_requests: int, concurrency: int, prompt: str) -> None:
+def run_warmup(target: Target, api_mode: ApiMode, warmup_requests: int, concurrency: int, prompt: str) -> None:
     if warmup_requests <= 0:
         return
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = [executor.submit(invoke, target, prompt, api_mode) for _ in range(warmup_requests)]
         for future in as_completed(futures):
-            future.exception()  # Discard warm-up successes and failures alike.
+            future.result()
 
 
-def run_load(target: str, api_mode: ApiMode, requests: int, concurrency: int, prompt: str) -> dict[str, Any]:
+def run_load(target: Target, api_mode: ApiMode, requests: int, concurrency: int, prompt: str) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     failures_by_type: dict[str, int] = {}
     failures_by_category: dict[str, int] = {}
@@ -199,7 +199,14 @@ def main() -> int:
         print(f"Load test configuration error: {error}", file=sys.stderr)
         return 2
     for mode in modes:
-        run_warmup(args.target, mode, args.warmup_requests, args.concurrency, args.prompt)
+        try:
+            run_warmup(args.target, mode, args.warmup_requests, args.concurrency, args.prompt)
+        except Exception as error:
+            print(
+                json.dumps({"status": "failed", "phase": "warmup", "api_mode": mode, "error_type": type(error).__name__}),
+                file=sys.stderr,
+            )
+            return 1
     reports = [run_load(args.target, mode, args.requests, args.concurrency, args.prompt) for mode in modes]
     output = {
         "target": args.target,

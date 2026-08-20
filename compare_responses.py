@@ -10,14 +10,14 @@ from typing import Any
 from azure.core.exceptions import AzureError
 from openai import OpenAIError
 
-from smoke_test import ChatResult, invoke_chat
+from smoke_test import ChatResult, Target, invoke_chat
 
 
-def legacy_chat(target: str, prompt: str) -> ChatResult:
+def legacy_chat(target: Target, prompt: str) -> ChatResult:
     return invoke_chat("legacy", target, prompt)
 
 
-def v1_chat(target: str, prompt: str) -> ChatResult:
+def v1_chat(target: Target, prompt: str) -> ChatResult:
     return invoke_chat("v1", target, prompt)
 
 

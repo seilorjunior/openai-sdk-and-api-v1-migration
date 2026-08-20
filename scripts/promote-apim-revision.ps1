@@ -16,11 +16,16 @@ if (-not $currentBaseUrl) { throw 'Set APIM_OPENAI_BASE_URL before running the r
 $candidateBaseUrl = $currentBaseUrl -replace '/openai(?=/|$)', "/openai;rev=$CandidateRevision"
 if ($candidateBaseUrl -eq $currentBaseUrl) { throw 'APIM_OPENAI_BASE_URL must contain the /openai API path.' }
 
-function Set-CurrentRevision([string] $Revision, [string] $Notes) {
+function Set-CurrentRevision {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string] $Revision, [string] $Notes)
+
     $apiRevisionId = "$serviceId/apis/$ApiId;rev=$Revision"
     $body = @{ properties = @{ apiId = $apiRevisionId; notes = $Notes } } | ConvertTo-Json -Compress
-    az rest --method put --uri $releaseUri --body $body --headers 'Content-Type=application/json' --output none
-    if ($LASTEXITCODE -ne 0) { throw "Unable to release APIM revision $Revision." }
+    if ($PSCmdlet.ShouldProcess($apiRevisionId, 'Set current APIM revision')) {
+        az rest --method put --uri $releaseUri --body $body --headers 'Content-Type=application/json' --output none
+        if ($LASTEXITCODE -ne 0) { throw "Unable to release APIM revision $Revision." }
+    }
 }
 
 try {

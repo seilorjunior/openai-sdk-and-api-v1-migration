@@ -81,6 +81,13 @@ class LoadAndCompareTests(unittest.TestCase):
         self.assertEqual(report["failures_by_category"]["transport"], 1)
         self.assertEqual(report["failures_by_category"]["request"], 1)
 
+    @patch("load_test.invoke")
+    def test_warmup_raises_request_failure(self, invoke) -> None:
+        invoke.side_effect = ValueError("invalid configuration")
+
+        with self.assertRaisesRegex(ValueError, "invalid configuration"):
+            load_test.run_warmup("direct", "v1", 1, 1, "ready")
+
     @patch("load_test.run_warmup")
     @patch("load_test.run_load")
     @patch("load_test.validate_configuration")
@@ -117,6 +124,38 @@ class LoadAndCompareTests(unittest.TestCase):
                 unittest.mock.call("apim", "legacy", 4, 2, "ready"),
             ],
         )
+
+    @patch("load_test.run_warmup")
+    @patch("load_test.run_load")
+    @patch("load_test.validate_configuration")
+    @patch("load_test.parse_args")
+    def test_warmup_failure_aborts_before_measured_load(
+        self,
+        parse_args,
+        validate_configuration,
+        run_load,
+        run_warmup,
+    ) -> None:
+        parse_args.return_value = Namespace(
+            target="apim",
+            api_mode="v1",
+            requests=4,
+            concurrency=2,
+            prompt="ready",
+            confirm_large_load=False,
+            warmup_requests=1,
+        )
+        run_warmup.side_effect = RuntimeError("sensitive backend response")
+
+        with patch("sys.stderr") as stderr:
+            exit_code = load_test.main()
+
+        self.assertEqual(exit_code, 1)
+        run_load.assert_not_called()
+        output = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn('"phase": "warmup"', output)
+        self.assertIn('"error_type": "RuntimeError"', output)
+        self.assertNotIn("sensitive backend response", output)
 
     @patch("load_test.parse_args")
     def test_large_load_requires_explicit_confirmation(self, parse_args) -> None:

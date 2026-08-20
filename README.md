@@ -1,4 +1,4 @@
-# OpenAI SDK and API v1 migration POC
+# OpenAI SDK and API v1 migration
 
 **English** | [Português (Brasil)](README.pt-BR.md)
 
@@ -51,7 +51,7 @@ The dual policy applies only to the existing chat operation. It does not fall ba
 | `validate_apim.py` | Live or offline APIM configuration validation with secret redaction. |
 | `pyproject.toml` | pytest, Ruff, and mypy configuration. |
 | `requirements.txt` | Runtime dependencies (v1 SDK plus the legacy comparison SDK). |
-| `requirements-dev.txt` | Optional pytest/Ruff/mypy tooling for local and CI quality checks. |
+| `requirements-dev.txt` | Optional pytest/coverage/Ruff/mypy/pip-audit tooling for local and CI quality checks. |
 
 ## Prerequisites
 
@@ -68,12 +68,16 @@ The dual policy applies only to the existing chat operation. It does not fall ba
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m unittest discover -s tests -v
-ruff check .
-az bicep build --file infra/main.bicep --outfile infra/main.json
+python -m pytest --cov --cov-report=term-missing
+python -m ruff check .
+python -m mypy
+python -m pip_audit --no-deps -r requirements.txt
+az bicep build --file infra/main.bicep --outfile .\infra\main.json
+az bicep lint --file infra/main.bicep
+az bicep lint --file infra/resources.bicep
 ```
 
-The unit tests and Bicep build are deterministic, run fully offline, and never require live Azure credentials or network access. The `Migration validation` GitHub Actions workflow runs the same checks (pytest/unittest across a Python 3.10-3.13 matrix, `ruff check .`, an informational `mypy` pass, and `az bicep build`/`az bicep lint`) on pushes to `main` and pull requests. `requirements-dev.txt` is optional and only needed for linting/type-checking/pytest; it is not required to run `smoke_test.py`, `capability_test.py`, `compare_responses.py`, `load_test.py`, or `validate_apim.py`. An optional `.pre-commit-config.yaml` runs Ruff on commit if you choose to install `pre-commit`.
+The tests, lint, type checks, and Bicep validation are deterministic and require no live Azure credentials. The `Migration validation` GitHub Actions workflow runs pytest with a 60% coverage floor across Python 3.10-3.13, blocking Ruff and mypy checks, and a dependency vulnerability audit in a clean Python 3.13 environment. It also builds and lints Bicep, parses generated and parameter ARM JSON, and analyzes every operational PowerShell script with PSScriptAnalyzer. Dependabot checks pip and GitHub Actions dependencies weekly, while workflow actions are pinned to immutable commit SHAs. `requirements-dev.txt` is optional and only supports local/CI quality checks; it is not required by the command-line tools at runtime. The optional `.pre-commit-config.yaml` runs the same non-mutating Ruff check before commits.
 
 ## Provision with Azure Developer CLI
 
@@ -203,7 +207,7 @@ $env:OPENAI_SAFETY_PROMPT = '<approved-test-prompt>'
 python .\capability_test.py --target apim --capability safety
 ```
 
-The load test allows at most 10,000 requests per mode with concurrency capped at 100. Runs above 1,000 requests per mode require `--confirm-large-load`. Each worker thread builds and reuses one client per API mode instead of creating a new client per request, so measured latency reflects request time rather than repeated client/connection setup. Use `--warmup-requests` (0-100, default 0) to run unmeasured requests first and prime connections/auth tokens before the timed run. Reports include percentiles, tokens, `failures_by_type` (exception class), `failures_by_category` (`transport` for connection/timeout failures, `request` for HTTP/configuration failures, `other` otherwise), and cost only when approved rates are supplied:
+The load test allows at most 10,000 requests per mode with concurrency capped at 100. Runs above 1,000 requests per mode require `--confirm-large-load`. Each worker thread builds and reuses one client per API mode instead of creating a new client per request, so measured latency reflects request time rather than repeated client/connection setup. Use `--warmup-requests` (0-100, default 0) to run unmeasured requests first and prime connections/auth tokens before the timed run. Any warmup failure emits only a sanitized exception classification and aborts before measured traffic begins. Reports include percentiles, tokens, `failures_by_type` (exception class), `failures_by_category` (`transport` for connection/timeout failures, `request` for HTTP/configuration failures, `other` otherwise), and cost only when approved rates are supplied:
 
 ```powershell
 $env:OPENAI_INPUT_USD_PER_1M_TOKENS = '<rate>'
@@ -227,7 +231,7 @@ The script resolves `azd` outputs, holds the key only in memory, validates APIM,
 
 ### GitHub Actions
 
-The manual `Live migration gate` workflow uses the protected `openai-migration-live` environment. Configure the variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_OPENAI_BASE_URL`, `LEGACY_MODELS_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, and `APIM_OPENAI_BASE_URL`. Configure `APIM_SUBSCRIPTION_KEY` as a secret. Azure authentication uses OIDC federation; do not store client secrets.
+The tracked, manual `Live migration gate` workflow uses the protected `openai-migration-live` environment. Configure the variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_OPENAI_BASE_URL`, `LEGACY_MODELS_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, and `APIM_OPENAI_BASE_URL`. Configure `APIM_SUBSCRIPTION_KEY` as a secret. Azure authentication uses OIDC federation and pinned actions; do not store client secrets.
 
 ### Remove the obsolete operation
 

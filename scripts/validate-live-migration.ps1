@@ -10,6 +10,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$pythonCommand = $PythonExecutable
 
 function Get-AzdValue([string] $Name) {
     $value = azd env get-value $Name
@@ -68,7 +69,7 @@ if ($LASTEXITCODE -ne 0 -or -not $apimKey) { throw 'Unable to retrieve the APIM 
 $env:APIM_SUBSCRIPTION_KEY = $apimKey
 try {
     Invoke-Checked 'Validating deployed APIM configuration' {
-        & $PythonExecutable "$PSScriptRoot\..\validate_apim.py" `
+        & $pythonCommand "$PSScriptRoot\..\validate_apim.py" `
             --resource-group $ResourceGroup `
             --service-name $ServiceName `
             --api-id $ApiId `
@@ -77,12 +78,12 @@ try {
 
     foreach ($mode in @('default', 'v1', 'legacy')) {
         Invoke-Checked "Running APIM $mode smoke test" {
-            & $PythonExecutable "$PSScriptRoot\..\smoke_test.py" --target apim --api-mode $mode
+            & $pythonCommand "$PSScriptRoot\..\smoke_test.py" --target apim --api-mode $mode
         }
     }
 
     Invoke-Checked 'Comparing legacy and v1 through APIM' {
-        & $PythonExecutable "$PSScriptRoot\..\compare_responses.py" --target apim
+        & $pythonCommand "$PSScriptRoot\..\compare_responses.py" --target apim
     }
 
     if (-not $SkipTelemetryCheck) {
