@@ -1,3 +1,13 @@
+<#
+.SYNOPSIS
+Promotes a validated APIM revision with automatic rollback on failure.
+
+.DESCRIPTION
+Created to make APIM cutover repeatable and recoverable. It smoke-tests the
+candidate revision through its revision-specific URL, promotes it, runs bounded
+post-promotion smoke and load checks, and restores the stable revision if any gate
+fails.
+#>
 param(
     [Parameter(Mandatory)] [string] $ResourceGroup,
     [Parameter(Mandatory)] [string] $ServiceName,

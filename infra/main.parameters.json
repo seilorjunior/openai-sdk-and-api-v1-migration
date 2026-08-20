@@ -14,6 +14,42 @@
     "publisherEmail": {
       "value": "${APIM_PUBLISHER_EMAIL}"
     },
+    "modelName": {
+      "value": "${AZURE_OPENAI_MODEL_NAME=gpt-4.1-mini}"
+    },
+    "modelVersion": {
+      "value": "${AZURE_OPENAI_MODEL_VERSION=2025-04-14}"
+    },
+    "modelDeploymentSku": {
+      "value": "${AZURE_OPENAI_DEPLOYMENT_SKU=GlobalStandard}"
+    },
+    "modelDeploymentCapacity": {
+      "value": "${AZURE_OPENAI_DEPLOYMENT_CAPACITY=10}"
+    },
+    "apimSkuName": {
+      "value": "${APIM_SKU_NAME=Developer}"
+    },
+    "apimCapacity": {
+      "value": "${APIM_CAPACITY=1}"
+    },
+    "rateLimitCallsPerMinute": {
+      "value": "${APIM_RATE_LIMIT_CALLS_PER_MINUTE=60}"
+    },
+    "backendRetryCount": {
+      "value": "${APIM_BACKEND_RETRY_COUNT=2}"
+    },
+    "backendRetryIntervalSeconds": {
+      "value": "${APIM_BACKEND_RETRY_INTERVAL_SECONDS=1}"
+    },
+    "telemetrySamplingPercentage": {
+      "value": "${APIM_TELEMETRY_SAMPLING_PERCENTAGE=100}"
+    },
+    "failedRequestsAlertThreshold": {
+      "value": "${APIM_FAILED_REQUESTS_ALERT_THRESHOLD=5}"
+    },
+    "alertEmail": {
+      "value": "${APIM_ALERT_EMAIL=}"
+    },
     "telemetryReaderPrincipalId": {
       "value": "${TELEMETRY_READER_PRINCIPAL_ID=}"
     },

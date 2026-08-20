@@ -16,25 +16,45 @@ This proof of concept addresses the Azure AI Inference SDK retirement announced 
 
 ## Architecture
 
-```text
-Python application
-  |-- OpenAI SDK direct --> <resource>.openai.azure.com/openai/v1/*
-  |
-  |-- APIM v1 --> <apim>.azure-api.net/openai/v1/*
-  |                 `-- managed identity, audience https://ai.azure.com
-  |
-  `-- APIM dual chat --> <apim>.azure-api.net/openai/v1/chat/completions
-    |-- X-API-Mode missing or v1
-    |     `-- /openai/v1/chat/completions
-    |          audience https://ai.azure.com
-    `-- X-API-Mode: legacy
-      `-- /openai/deployments/<deployment>/chat/completions?api-version=2024-10-21
-           audience https://cognitiveservices.azure.com
+```mermaid
+flowchart LR
+  subgraph Clients[Clients and validation]
+    App[Python application<br/>OpenAI SDK]
+    Gate[GitHub Actions and operator scripts<br/>smoke, parity, load, retirement gates]
+  end
 
-All deployed paths reach the same model deployment in the Azure OpenAI resource.
+  subgraph Runtime[Azure runtime]
+    APIM[API Management<br/>subscription access, rate limits, policies]
+    Router{Chat mode policy<br/>X-API-Mode}
+    Identity[User-assigned managed identity<br/>backend and telemetry authentication]
+    OpenAI[Azure OpenAI<br/>single model deployment]
+  end
+
+  subgraph Observability[Observability]
+    Insights[Application Insights<br/>correlated API telemetry]
+    Logs[(Log Analytics workspace<br/>gateway logs and retirement queries)]
+    Alert[Azure Monitor alert<br/>failed-request notification]
+  end
+
+  App -->|calls v1 directly with Microsoft Entra authentication| OpenAI
+  App -->|calls gateway with an APIM subscription key| APIM
+  Gate -->|validates deployed routes and evidence| APIM
+  Gate -->|runs direct capability checks| OpenAI
+  APIM -->|routes the chat operation| Router
+  Router -->|missing or v1: /openai/v1/chat/completions| OpenAI
+  Router -->|legacy: versioned deployment endpoint| OpenAI
+  APIM -.->|uses for backend and logger tokens| Identity
+  Identity -->|Cognitive Services User RBAC| OpenAI
+  Identity -->|Monitoring Metrics Publisher RBAC| Insights
+  APIM -->|emits API diagnostics without bodies| Insights
+  Insights -->|stores workspace-based telemetry| Logs
+  APIM -->|exports platform logs and metrics| Logs
+  APIM -->|feeds the failed-request metric| Alert
 ```
 
-The dual policy applies only to the existing chat operation. It does not fall back after a failure: a missing header preserves the v1 backend, while any non-empty value other than `v1|legacy` returns `400 invalid_api_mode`.
+Arrows show request, validation, telemetry, or authorization flow. All deployed request paths reach the same model deployment. The optional private-networking mode places APIM in a VNet and reaches Azure OpenAI through a private endpoint and private DNS; those network resources are omitted above to keep the routing decision readable.
+
+The dual policy applies only to the existing chat operation. Other APIM operations use v1 directly. The policy does not fall back after a failure: a missing header preserves the v1 backend, while any non-empty value other than `v1|legacy` returns `400 invalid_api_mode`.
 
 ## Repository layout
 
@@ -42,12 +62,17 @@ The dual policy applies only to the existing chat operation. It does not fall ba
 | --- | --- |
 | `infra/` | Subscription-scoped Bicep and compiled ARM for Azure OpenAI, APIM, observability, and RBAC. |
 | `samples/` | Reference APIM policies for v1 and dual-mode chat. |
-| `scripts/` | Live gate, key rotation, revision promotion, and safe obsolete-operation removal. |
+| `scripts/validate-live-migration.ps1` | Runs the complete deployed migration gate while keeping the APIM key in process memory. |
+| `scripts/rotate-apim-key.ps1` | Rotates the protected APIM key, validates the new slot, then invalidates the old slot. |
+| `scripts/promote-apim-revision.ps1` | Promotes a canary-tested APIM revision and automatically restores the stable revision on failure. |
+| `scripts/remove-obsolete-apim-operation.ps1` | Safely removes an operation that an incremental ARM deployment cannot delete. |
 | `tests/` | Deterministic tests run locally and in CI. |
 | `smoke_test.py` | Direct/APIM smoke tests for default, v1, and legacy modes. |
 | `capability_test.py` | Opt-in probes for OpenAI API v1 capabilities. |
 | `compare_responses.py` | Behavioral comparison without logging generated text. |
 | `load_test.py` | Bounded load test with client reuse, optional warm-up, and latency/token/cost reporting. |
+| `migration_scan.py` | Fleet scanner for legacy SDKs, clients, endpoints, and dated API versions. |
+| `retirement_report.py` | Fail-closed retirement evidence from correlated Application Insights telemetry. |
 | `validate_apim.py` | Live or offline APIM configuration validation with secret redaction. |
 | `pyproject.toml` | pytest, Ruff, and mypy configuration. |
 | `requirements.txt` | Runtime dependencies (v1 SDK plus the legacy comparison SDK). |
@@ -77,7 +102,18 @@ az bicep lint --file infra/main.bicep
 az bicep lint --file infra/resources.bicep
 ```
 
-The tests, lint, type checks, and Bicep validation are deterministic and require no live Azure credentials. The `Migration validation` GitHub Actions workflow runs pytest with a 60% coverage floor across Python 3.10-3.13, blocking Ruff and mypy checks, and a dependency vulnerability audit in a clean Python 3.13 environment. It also builds and lints Bicep, parses generated and parameter ARM JSON, and analyzes every operational PowerShell script with PSScriptAnalyzer. Dependabot checks pip and GitHub Actions dependencies weekly, while workflow actions are pinned to immutable commit SHAs. `requirements-dev.txt` is optional and only supports local/CI quality checks; it is not required by the command-line tools at runtime. The optional `.pre-commit-config.yaml` runs the same non-mutating Ruff check before commits.
+The tests, lint, type checks, and Bicep validation are deterministic and require no live Azure credentials. The `Migration validation` GitHub Actions workflow runs pytest with a 60% coverage floor across Python 3.10-3.13, blocking Ruff and mypy checks, and a dependency vulnerability audit in a clean Python 3.13 environment. It also builds and lints Bicep, parses generated and parameter ARM JSON, analyzes every operational PowerShell script with PSScriptAnalyzer, and uploads `migration-scan.sarif`. Dependabot checks pip and GitHub Actions dependencies weekly, while workflow actions are pinned to immutable commit SHAs. `requirements-dev.txt` is optional and only supports local/CI quality checks; it is not required by the command-line tools at runtime. The optional `.pre-commit-config.yaml` runs the same non-mutating Ruff check before commits.
+
+## Scan an application fleet
+
+Scan one or more repository roots before planning migration waves:
+
+```powershell
+python .\migration_scan.py C:\Git\app-one C:\Git\app-two --format json --output migration-scan.json
+python .\migration_scan.py C:\Git\app-one --format sarif --output migration-scan.sarif --fail-on-findings
+```
+
+The scanner reports `azure-ai-inference`, `ChatCompletionsClient`, `/models`, dated `api-version` values, `AzureOpenAI(`, and `/openai/deployments/` as rules `AOAI001` through `AOAI006`. It accepts repeatable `--exclude` directory names and ignores common virtual environments, caches, build output, and dependency folders by default. Use `--fail-on-findings` in consumer repositories after approving their baseline. This POC intentionally retains a legacy client and route as the comparison control, so its own CI preserves SARIF evidence without treating expected findings as a failure.
 
 ## Provision with Azure Developer CLI
 
@@ -95,6 +131,25 @@ azd provision
 ```
 
 `TELEMETRY_READER_PRINCIPAL_ID` is optional. When set, Bicep grants `Monitoring Reader` only on the Application Insights component; access to the Log Analytics workspace is not required. Retrieve the signed-in user's object ID with `az ad signed-in-user show --query id -o tsv`.
+
+The deployment also accepts these optional `azd` settings; the values shown are the defaults from `infra/main.parameters.json`:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `AZURE_OPENAI_MODEL_NAME` | `gpt-4.1-mini` | Model deployed by Azure OpenAI. |
+| `AZURE_OPENAI_MODEL_VERSION` | `2025-04-14` | Model version. |
+| `AZURE_OPENAI_DEPLOYMENT_SKU` | `GlobalStandard` | Deployment SKU. |
+| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `10` | Deployment capacity. |
+| `APIM_SKU_NAME` / `APIM_CAPACITY` | `Developer` / `1` | APIM tier and units. |
+| `APIM_RATE_LIMIT_CALLS_PER_MINUTE` | `60` | Per-subscription or caller-IP requests allowed each minute. |
+| `APIM_BACKEND_RETRY_COUNT` / `APIM_BACKEND_RETRY_INTERVAL_SECONDS` | `2` / `1` | APIM retries and initial interval for backend `5xx` responses only. |
+| `APIM_TELEMETRY_SAMPLING_PERCENTAGE` | `100` | Percentage of APIM request telemetry sent to Application Insights. |
+| `APIM_FAILED_REQUESTS_ALERT_THRESHOLD` | `5` | Failures in five minutes that trigger the alert. |
+| `APIM_ALERT_EMAIL` | publisher email | Alert recipient when different from the APIM publisher. |
+| `ENABLE_PRIVATE_NETWORKING` | `false` | Enables APIM VNet integration and the Azure OpenAI private endpoint. |
+| `APIM_SUBNET_RESOURCE_ID` | empty | Dedicated APIM subnet; required with private networking. |
+| `PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID` | empty | Private endpoint subnet; required with private networking. |
+| `VIRTUAL_NETWORK_RESOURCE_ID` | empty | VNet linked to the Azure OpenAI private DNS zone. |
 
 APIM provisioning can take several minutes. When it completes, `azd` stores non-secret endpoints and resource names in the environment. Load them into the current session and select the same Azure subscription:
 
@@ -168,6 +223,8 @@ python .\smoke_test.py --target apim
 
 The base URL must end with the prefix exposing API v1. The policy removes the technical `Authorization` header created by the SDK and authenticates the backend through the APIM managed identity.
 
+The OpenAI SDK owns `429` retry and backoff behavior through `OPENAI_MAX_RETRIES`. APIM retries only `5xx` backend responses. This avoids multiplying retries across both layers during throttling and keeps client-visible quota pressure measurable.
+
 ## Keep legacy and v1 during transition
 
 The `--api-mode` option selects the protocol without mixing URLs, authentication scopes, or SDKs. Set the complete legacy endpoint, including `/models`:
@@ -195,11 +252,22 @@ To compare both direct paths without logging generated text:
 python .\compare_responses.py --target direct
 ```
 
+For a repeatable release gate, run the JSONL corpus and persist the sanitized report:
+
+```powershell
+python .\compare_responses.py --target apim `
+  --corpus .\samples\parity-corpus.jsonl `
+  --min-pass-rate 1.0 `
+  --output .\parity-report.json
+```
+
+Each non-empty JSONL line requires a unique string `id` and a string `prompt`. Optional fields are `max_tokens`, `max_length_ratio`, `expected_finish_reason`, `expected_tool_call_count`, `tools`, `tool_choice`, and `response_format`. The pass rate is the fraction of scenarios whose normalized legacy and v1 behavior passes every configured check. Generated text is not written to the report. The original single-prompt mode remains available when `--corpus` is omitted.
+
 Only chat is dual-mode. Responses, embeddings, images, audio, files, batches, fine-tuning, cancellation, and advanced capability tests remain v1-only.
 
 ## Capabilities, resilience, and load
 
-List options with `python .\capability_test.py --help`. Capabilities that require another deployment or file return `skipped`; batch and fine-tuning create jobs only with `--execute-mutating`.
+List options with `python .\capability_test.py --help`. Capabilities that require another deployment or file return `skipped`; a skipped capability does not fail the process. Batch and fine-tuning are guarded before any client operation and create uploads or jobs only with the explicit `--execute-mutating` flag. The runner rejects legacy mode because advanced capabilities are v1-only and emits sanitized exception types rather than exception text.
 
 ```powershell
 python .\capability_test.py --target direct --capability all
@@ -232,6 +300,8 @@ The script resolves `azd` outputs, holds the key only in memory, validates APIM,
 ### GitHub Actions
 
 The tracked, manual `Live migration gate` workflow uses the protected `openai-migration-live` environment. Configure the variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_OPENAI_BASE_URL`, `LEGACY_MODELS_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, and `APIM_OPENAI_BASE_URL`. Configure `APIM_SUBSCRIPTION_KEY` as a secret. Azure authentication uses OIDC federation and pinned actions; do not store client secrets.
+
+The dispatch inputs are `target`, `run_load_test`, `minimum_parity_pass_rate`, `legacy_p95_baseline_ms`, `application_insights_name`, `resource_group`, `rollback_rehearsed`, `owner_approved`, and `enforce_retirement_ready`. For APIM retirement evidence, provide the Application Insights component, its resource group, the approved legacy p95 baseline, and the rollback and owner approvals. Enable `enforce_retirement_ready` only when the run is intended to block retirement. The workflow uploads `parity-report.json` and `retirement-report.json` even when a gate fails.
 
 ### Remove the obsolete operation
 
@@ -272,6 +342,23 @@ Log Analytics receives APIM logs and metrics, and an alert notifies the publishe
 - passing capability and APIM-to-APIM comparison tests, with intentional differences accepted;
 - a rehearsed rollback that restores the previous policy within 15 minutes without changing the public URL;
 - formal approval from the cutover owner.
+
+Generate the decision record directly from Application Insights:
+
+```powershell
+python .\retirement_report.py `
+  --application-insights-name '<component-name>' `
+  --subscription-id '<subscription-id>' `
+  --resource-group '<resource-group>' `
+  --legacy-p95-baseline-ms 5000 `
+  --rollback-rehearsed `
+  --parity-passed `
+  --owner-approved `
+  --require-ready `
+  --output .\retirement-report.json
+```
+
+The report correlates APIM routing traces with requests and summarizes 7, 14, and 30-day windows. Readiness requires complete request correlation, v1 traffic, zero legacy requests over 14 days, at least 99.5% v1 success, v1 p95 within 10% of the approved legacy baseline, a passing parity run, a rehearsed rollback, and owner approval. Missing telemetry, baseline, or approval fails closed. Without `--require-ready`, the command still writes evidence but does not turn a not-ready decision into a process failure. An exported Application Insights query response can be evaluated offline with `--input`.
 
 After cutover, keep the legacy branch disabled but recoverable for seven days. Remove it through Bicep after that period.
 

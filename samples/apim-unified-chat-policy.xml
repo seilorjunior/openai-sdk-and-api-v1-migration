@@ -1,7 +1,7 @@
 <policies>
     <inbound>
         <base />
-        <rate-limit-by-key calls="60" renewal-period="60" counter-key="@(context.Subscription?.Key ?? context.Request.IpAddress)" />
+        <rate-limit-by-key calls="__RATE_LIMIT_CALLS__" renewal-period="60" counter-key="@(context.Subscription?.Key ?? context.Request.IpAddress)" />
         <set-header name="Authorization" exists-action="delete" />
         <set-variable name="migration-api-mode" value="@{ var mode = context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).ToLowerInvariant(); return string.IsNullOrEmpty(mode) ? &quot;default-v1&quot; : (mode == &quot;v1&quot; || mode == &quot;legacy&quot; ? mode : &quot;invalid&quot;); }" />
         <trace source="openai-v1-migration" severity="information">
@@ -33,7 +33,7 @@
         <set-header name="X-API-Mode" exists-action="delete" />
     </inbound>
     <backend>
-        <retry condition="@(context.Response != null &amp;&amp; context.Response.StatusCode &gt;= 500)" count="2" interval="1" delta="1" max-interval="4" first-fast-retry="false">
+        <retry condition="@(context.Response != null &amp;&amp; context.Response.StatusCode &gt;= 500)" count="__RETRY_COUNT__" interval="__RETRY_INTERVAL__" delta="1" max-interval="4" first-fast-retry="false">
             <forward-request buffer-request-body="true" />
         </retry>
     </backend>

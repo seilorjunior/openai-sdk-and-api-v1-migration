@@ -1,10 +1,22 @@
 import unittest
+from pathlib import Path
 
 import httpx
 from openai import OpenAI
 
 
 class RetryBehaviorTests(unittest.TestCase):
+    def test_apim_policies_leave_429_retries_to_the_sdk(self) -> None:
+        samples = Path(__file__).resolve().parents[1] / "samples"
+
+        for policy_name in ("apim-policy.xml", "apim-unified-chat-policy.xml"):
+            with self.subTest(policy=policy_name):
+                policy = (samples / policy_name).read_text(encoding="utf-8")
+                retry_condition = policy.split('<retry condition="', 1)[1].split('"', 1)[0]
+
+                self.assertNotIn("429", retry_condition)
+                self.assertIn("StatusCode &gt;= 500", retry_condition)
+
     def test_sdk_retries_429_and_succeeds(self) -> None:
         attempts = 0
 

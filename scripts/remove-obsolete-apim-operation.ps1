@@ -1,3 +1,13 @@
+<#
+.SYNOPSIS
+Removes the obsolete APIM chat operation after dual-mode migration validation.
+
+.DESCRIPTION
+Created because incremental ARM deployments do not delete operations removed from
+Bicep. It verifies that the replacement POST /v1/chat/completions operation exists
+and that the obsolete operation has the expected identity and route before offering
+a high-impact, ShouldProcess-protected deletion.
+#>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
     [Parameter(Mandatory)] [string] $ResourceGroup,

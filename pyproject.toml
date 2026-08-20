@@ -9,6 +9,7 @@ readme = "README.md"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = [
@@ -16,6 +17,8 @@ source = [
     "capability_test",
     "compare_responses",
     "load_test",
+    "migration_scan",
+    "retirement_report",
     "validate_apim",
 ]
 
@@ -43,6 +46,8 @@ known-first-party = [
     "capability_test",
     "compare_responses",
     "load_test",
+    "migration_scan",
+    "retirement_report",
     "validate_apim",
 ]
 
@@ -53,6 +58,8 @@ files = [
     "capability_test.py",
     "compare_responses.py",
     "load_test.py",
+    "migration_scan.py",
+    "retirement_report.py",
     "validate_apim.py",
 ]
 ignore_missing_imports = true

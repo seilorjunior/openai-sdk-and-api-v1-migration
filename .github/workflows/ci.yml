@@ -29,9 +29,21 @@ jobs:
           --cov=capability_test
           --cov=compare_responses
           --cov=load_test
+          --cov=migration_scan
+          --cov=retirement_report
           --cov=validate_apim
           --cov-report=term-missing
           --cov-fail-under=60
+      - name: Generate migration scan evidence
+        if: ${{ matrix.python-version == '3.13' }}
+        run: python migration_scan.py . --format sarif --output migration-scan.sarif
+      - name: Upload migration scan evidence
+        if: ${{ matrix.python-version == '3.13' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: migration-scan
+          path: migration-scan.sarif
+          if-no-files-found: error
       - name: Ruff lint
         run: python -m ruff check .
       - name: mypy

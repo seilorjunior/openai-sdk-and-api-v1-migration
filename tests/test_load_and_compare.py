@@ -1,15 +1,78 @@
 import os
+import tempfile
 import unittest
 from argparse import Namespace
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 
 import compare_responses
 import load_test
+import retirement_report
 
 
 class LoadAndCompareTests(unittest.TestCase):
+    def test_retirement_report_fails_closed_without_telemetry_or_approvals(self) -> None:
+        report = retirement_report.evaluate([], legacy_p95_baseline_ms=None)
+
+        self.assertFalse(report["ready"])
+        self.assertFalse(report["checks"]["telemetry_complete"])
+        self.assertFalse(report["checks"]["v1_success_rate"])
+        self.assertFalse(report["checks"]["v1_p95_within_approved_baseline"])
+
+    def test_retirement_report_passes_with_clean_14_day_evidence_and_approvals(self) -> None:
+        rows = [
+            {
+                "window_days": 14,
+                "api_mode": "v1",
+                "request_count": 1000,
+                "observed_request_count": 1000,
+                "failed_count": 1,
+                "throttled_count": 2,
+                "p50_ms": 80.0,
+                "p95_ms": 105.0,
+                "p99_ms": 150.0,
+                "last_request": "2026-07-01T00:00:00Z",
+            }
+        ]
+
+        report = retirement_report.evaluate(
+            rows,
+            legacy_p95_baseline_ms=100.0,
+            rollback_rehearsed=True,
+            parity_passed=True,
+            owner_approved=True,
+        )
+
+        self.assertTrue(report["ready"])
+        self.assertEqual(report["windows"]["14"]["combined_v1"]["success_rate"], 0.999)
+        self.assertEqual(report["thresholds"]["observed_v1_p95_ms"], 105.0)
+
+    def test_retirement_report_requires_complete_correlated_request_telemetry(self) -> None:
+        rows = [
+            {
+                "window_days": 14,
+                "api_mode": "default-v1",
+                "request_count": 10,
+                "observed_request_count": 9,
+                "failed_count": 0,
+                "throttled_count": 0,
+                "p95_ms": 50.0,
+            }
+        ]
+
+        report = retirement_report.evaluate(
+            rows,
+            legacy_p95_baseline_ms=50.0,
+            rollback_rehearsed=True,
+            parity_passed=True,
+            owner_approved=True,
+        )
+
+        self.assertFalse(report["ready"])
+        self.assertFalse(report["checks"]["telemetry_complete"])
+
     def test_percentile_uses_nearest_rank(self) -> None:
         self.assertEqual(load_test.percentile([10, 20, 30, 40], 0.95), 40)
 
@@ -320,6 +383,74 @@ class LoadAndCompareTests(unittest.TestCase):
 
         self.assertFalse(normalized["output_nonempty"])
         self.assertEqual(normalized["output_length"], 3)
+
+    def test_load_corpus_rejects_duplicate_scenario_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            corpus = Path(directory) / "corpus.jsonl"
+            corpus.write_text(
+                '{"id":"same","prompt":"first"}\n{"id":"same","prompt":"second"}\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Duplicate corpus scenario id"):
+                compare_responses.load_corpus(corpus)
+
+    @patch("compare_responses.v1_chat")
+    @patch("compare_responses.legacy_chat")
+    def test_compare_corpus_reports_each_scenario_and_enforces_pass_rate(self, legacy_chat, v1_chat) -> None:
+        from smoke_test import ChatResult
+
+        legacy_chat.side_effect = [
+            ChatResult("model", "ready", "stop", 1, 1, 0),
+            ChatResult("model", "", "tool_calls", 2, 1, 1),
+        ]
+        v1_chat.side_effect = [
+            ChatResult("model", "ready", "stop", 1, 1, 0),
+            ChatResult("model", "not-a-tool", "stop", 2, 1, 0),
+        ]
+        scenarios = [
+            {"id": "deterministic", "prompt": "ready"},
+            {
+                "id": "tool-call",
+                "prompt": "Call lookup.",
+                "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}],
+                "tool_choice": "required",
+                "expected_finish_reason": "tool_calls",
+                "expected_tool_call_count": 1,
+            },
+        ]
+
+        report = compare_responses.compare_corpus("direct", scenarios, 2.0, 1.0)
+
+        self.assertFalse(report["passed"])
+        self.assertEqual(report["pass_rate"], 0.5)
+        self.assertEqual([result["id"] for result in report["scenarios"]], ["deterministic", "tool-call"])
+        legacy_chat.assert_any_call(
+            "direct",
+            "Call lookup.",
+            80,
+            {"tools": scenarios[1]["tools"], "tool_choice": "required"},
+        )
+
+    @patch("compare_responses.v1_chat")
+    @patch("compare_responses.legacy_chat")
+    def test_compare_corpus_allows_configured_aggregate_threshold(self, legacy_chat, v1_chat) -> None:
+        from smoke_test import ChatResult
+
+        matching = ChatResult("model", "ready", "stop", 1, 1, 0)
+        mismatch = ChatResult("model", "ready", "length", 1, 1, 0)
+        legacy_chat.side_effect = [matching, matching]
+        v1_chat.side_effect = [matching, mismatch]
+
+        report = compare_responses.compare_corpus(
+            "apim",
+            [{"id": "one", "prompt": "one"}, {"id": "two", "prompt": "two"}],
+            2.0,
+            0.5,
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["passed_count"], 1)
 
     @patch("compare_responses.v1_chat")
     @patch("compare_responses.legacy_chat")

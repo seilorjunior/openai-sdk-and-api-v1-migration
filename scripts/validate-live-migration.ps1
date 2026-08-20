@@ -1,3 +1,13 @@
+<#
+.SYNOPSIS
+Runs the end-to-end validation gate against a deployed migration environment.
+
+.DESCRIPTION
+Created to provide one repeatable operator command for validating the APIM
+configuration, default/v1/legacy routing, behavioral parity, sanitized telemetry,
+and legacy-retirement evidence before cutover or retirement. It resolves azd
+outputs and keeps the APIM subscription key only in process memory.
+#>
 param(
     [string] $ResourceGroup,
     [string] $ServiceName,
@@ -6,6 +16,12 @@ param(
     [string] $ApplicationInsightsName,
     [string] $SubscriptionId,
     [string] $PythonExecutable = 'python',
+    [string] $RetirementReportPath = 'retirement-report.json',
+    [double] $LegacyP95BaselineMs = 0,
+    [switch] $RollbackRehearsed,
+    [switch] $ParityPassed,
+    [switch] $OwnerApproved,
+    [switch] $RequireRetirementReady,
     [switch] $SkipTelemetryCheck
 )
 
@@ -125,6 +141,25 @@ traces
         }
         finally {
             Remove-Item $queryBodyPath -Force -ErrorAction SilentlyContinue
+        }
+
+        $retirementArguments = @(
+            "$PSScriptRoot\..\retirement_report.py",
+            '--application-insights-name', $ApplicationInsightsName,
+            '--subscription-id', $SubscriptionId,
+            '--resource-group', $ResourceGroup,
+            '--output', $RetirementReportPath
+        )
+        if ($LegacyP95BaselineMs -gt 0) {
+            $retirementArguments += @('--legacy-p95-baseline-ms', $LegacyP95BaselineMs)
+        }
+        if ($RollbackRehearsed) { $retirementArguments += '--rollback-rehearsed' }
+        if ($ParityPassed) { $retirementArguments += '--parity-passed' }
+        if ($OwnerApproved) { $retirementArguments += '--owner-approved' }
+        if ($RequireRetirementReady) { $retirementArguments += '--require-ready' }
+
+        Invoke-Checked "Writing legacy retirement evidence to $RetirementReportPath" {
+            & $pythonCommand @retirementArguments
         }
     }
 

@@ -14,6 +14,39 @@ on:
         required: true
         default: false
         type: boolean
+      minimum_parity_pass_rate:
+        description: Required fraction of parity corpus scenarios that pass
+        required: true
+        default: '1.0'
+        type: string
+      legacy_p95_baseline_ms:
+        description: Approved legacy p95 latency baseline in milliseconds (0 means missing)
+        required: true
+        default: '0'
+        type: string
+      application_insights_name:
+        description: Application Insights component containing APIM route telemetry
+        required: false
+        type: string
+      resource_group:
+        description: Resource group containing the Application Insights component
+        required: false
+        type: string
+      rollback_rehearsed:
+        description: Confirm the rollback procedure has been rehearsed
+        required: true
+        default: false
+        type: boolean
+      owner_approved:
+        description: Confirm the service owner approved legacy retirement
+        required: true
+        default: false
+        type: boolean
+      enforce_retirement_ready:
+        description: Fail unless every retirement criterion passes
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -47,7 +80,49 @@ jobs:
         run: python smoke_test.py --target apim --api-mode default
       - run: python smoke_test.py --target ${{ inputs.target }} --api-mode v1
       - run: python smoke_test.py --target ${{ inputs.target }} --api-mode legacy
-      - run: python compare_responses.py --target ${{ inputs.target }}
+      - name: Run behavioral parity corpus
+        id: parity
+        run: >-
+          python compare_responses.py
+          --target ${{ inputs.target }}
+          --corpus samples/parity-corpus.jsonl
+          --min-pass-rate ${{ inputs.minimum_parity_pass_rate }}
+          --output parity-report.json
       - run: python capability_test.py --target ${{ inputs.target }} --api-mode v1 --capability all
       - if: ${{ inputs.run_load_test }}
         run: python load_test.py --target ${{ inputs.target }} --api-mode both --requests 10 --concurrency 2
+      - name: Generate retirement evidence
+        if: ${{ always() && inputs.target == 'apim' }}
+        shell: bash
+        run: |
+          args=(
+            --application-insights-name "${{ inputs.application_insights_name }}"
+            --subscription-id "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+            --resource-group "${{ inputs.resource_group }}"
+            --output retirement-report.json
+          )
+          if [[ "${{ inputs.legacy_p95_baseline_ms }}" != "0" ]]; then
+            args+=(--legacy-p95-baseline-ms "${{ inputs.legacy_p95_baseline_ms }}")
+          fi
+          if [[ "${{ inputs.rollback_rehearsed }}" == "true" ]]; then
+            args+=(--rollback-rehearsed)
+          fi
+          if [[ "${{ steps.parity.outcome }}" == "success" ]]; then
+            args+=(--parity-passed)
+          fi
+          if [[ "${{ inputs.owner_approved }}" == "true" ]]; then
+            args+=(--owner-approved)
+          fi
+          if [[ "${{ inputs.enforce_retirement_ready }}" == "true" ]]; then
+            args+=(--require-ready)
+          fi
+          python retirement_report.py "${args[@]}"
+      - name: Upload live migration evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: live-migration-evidence-${{ inputs.target }}
+          path: |
+            parity-report.json
+            retirement-report.json
+          if-no-files-found: warn

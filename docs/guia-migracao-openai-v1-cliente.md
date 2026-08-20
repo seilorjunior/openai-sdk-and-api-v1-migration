@@ -35,22 +35,43 @@ O fluxo recomendado para o cliente é:
 
 ## Arquitetura de referência
 
-```text
-Aplicação Python
-    |-- direto: OpenAI SDK --> Azure OpenAI /openai/v1/*
-    |
-    |-- APIM v1: /openai/v1/* --> audiência https://ai.azure.com
-    |
-    `-- APIM chat dual: /openai/v1/chat/completions
-                |-- X-API-Mode ausente ou v1 --> /openai/v1/chat/completions
-                `-- X-API-Mode: legacy --> /openai/deployments/<deployment>/chat/completions
-                                                                            ?api-version=2024-10-21
+```mermaid
+flowchart LR
+    subgraph Clientes[Clientes e validação]
+        App[Aplicação Python<br/>OpenAI SDK]
+        Gate[CI e scripts operacionais<br/>smoke, paridade, carga e retirada]
+    end
 
-APIM usa chave de assinatura no frontend e identidade gerenciada no backend.
-Os dois branches da operação chegam ao mesmo deployment Azure OpenAI.
+    subgraph Runtime[Runtime no Azure]
+        APIM[API Management<br/>assinatura, rate limit e policies]
+        Router{Policy do modo de chat<br/>X-API-Mode}
+        Identity[Identidade gerenciada atribuída pelo usuário<br/>autenticação de backend e telemetria]
+        OpenAI[Azure OpenAI<br/>um único deployment de modelo]
+    end
+
+    subgraph Observability[Observabilidade]
+        Insights[Application Insights<br/>telemetria correlacionada da API]
+        Logs[(Log Analytics<br/>logs e evidências de retirada)]
+        Alert[Azure Monitor<br/>alerta de requisições com falha]
+    end
+
+    App -->|chama v1 diretamente com Microsoft Entra| OpenAI
+    App -->|chama o gateway com chave de assinatura| APIM
+    Gate -->|valida rotas implantadas e evidências| APIM
+    Gate -->|executa checks diretos de capacidades| OpenAI
+    APIM -->|roteia a operação de chat| Router
+    Router -->|ausente ou v1: /openai/v1/chat/completions| OpenAI
+    Router -->|legacy: endpoint versionado do deployment| OpenAI
+    APIM -.->|usa para tokens de backend e logger| Identity
+    Identity -->|RBAC Cognitive Services User| OpenAI
+    Identity -->|RBAC Monitoring Metrics Publisher| Insights
+    APIM -->|emite diagnósticos sem corpos| Insights
+    Insights -->|armazena telemetria no workspace| Logs
+    APIM -->|exporta logs e métricas da plataforma| Logs
+    APIM -->|fornece a métrica de falhas| Alert
 ```
 
-O API Management é opcional. Quando utilizado, ele centraliza autenticação do consumidor, limites, telemetria e políticas operacionais. A autenticação entre APIM e Azure OpenAI deve usar identidade gerenciada sempre que possível.
+Todos os caminhos de requisição chegam ao mesmo deployment do modelo. O API Management é opcional. Quando utilizado, ele centraliza autenticação do consumidor, limites, telemetria e políticas operacionais. A autenticação entre APIM e Azure OpenAI usa identidade gerenciada. O modo opcional de rede privada coloca o APIM em uma VNet e acessa o Azure OpenAI por private endpoint e DNS privado.
 
 ## Responsabilidades sugeridas
 
@@ -73,6 +94,17 @@ services.ai.azure.com/models
 /openai/deployments/
 api-version=
 ```
+
+O scanner incluído gera saída em texto, JSON ou SARIF e pode cobrir várias raízes:
+
+```powershell
+python .\migration_scan.py C:\Git\aplicacao-a C:\Git\aplicacao-b `
+    --format sarif `
+    --output migration-scan.sarif `
+    --fail-on-findings
+```
+
+Use `--fail-on-findings` como gate nos repositórios consumidores depois de aprovar o baseline. O repositório desta POC mantém implementações legadas para comparação e, portanto, publica o SARIF no CI sem exigir zero findings.
 
 Para cada consumidor, registrar:
 
@@ -173,6 +205,8 @@ No backend do APIM:
 4. Enviar o token ao Azure OpenAI.
 5. Não adicionar `api-version` à requisição v1.
 
+O cliente OpenAI controla retries de `429`. A policy APIM controla somente retries de `5xx`. Não repita `429` nas duas camadas, pois o número efetivo de tentativas se multiplica e mascara throttling e consumo de quota.
+
 Na fachada temporária de chat, o branch `legacy` usa o mesmo backend Azure OpenAI, a audiência `https://cognitiveservices.azure.com` e a rota `/openai/deployments/<deployment>/chat/completions?api-version=2024-10-21`. O branch `v1` usa `/openai/v1/chat/completions` e `https://ai.azure.com`. O header `X-API-Mode` não é encaminhado ao backend.
 
 Validar a configuração implantada:
@@ -238,6 +272,17 @@ python .\smoke_test.py --api-mode v1 --target direct
 python .\compare_responses.py --target direct
 ```
 
+Para substituir um prompt isolado por evidência repetível, use o corpus versionado:
+
+```powershell
+python .\compare_responses.py --target apim `
+    --corpus .\samples\parity-corpus.jsonl `
+    --min-pass-rate 1.0 `
+    --output .\parity-report.json
+```
+
+Cada linha JSONL contém `id` e `prompt`. Ela pode definir `max_tokens`, `max_length_ratio`, `expected_finish_reason`, `expected_tool_call_count`, `tools`, `tool_choice` e `response_format`. O relatório armazena métricas normalizadas e resultados dos checks, sem o conteúdo gerado.
+
 Para chat, o APIM provisionado pela POC usa a operação existente `/openai/v1/chat/completions`. Header ausente mantém v1; o smoke test envia `X-API-Mode` conforme `--api-mode`:
 
 ```powershell
@@ -267,7 +312,7 @@ python .\capability_test.py --target direct --capability all
 
 Resultados `skipped` indicam que a capacidade depende de outro deployment, arquivo ou autorização para criar recursos. Eles devem ser comparados com o inventário do Passo 1. Uma capacidade usada em produção não pode permanecer como `skipped` no aceite.
 
-Batch e fine-tuning criam recursos e somente devem ser executados em ambiente autorizado com `--execute-mutating`.
+Batch e fine-tuning criam recursos e somente devem ser executados em ambiente autorizado com `--execute-mutating`. Sem essa flag, o bloqueio ocorre antes de upload ou chamada de criação. Capacidades sem configuração retornam `skipped`; trate como bloqueante qualquer capacidade usada pela aplicação.
 
 ## Passo 6: validar comportamento e operação
 
@@ -305,6 +350,27 @@ Sequência recomendada:
 7. Monitorar erros, latência, tokens e throttling durante a janela acordada.
 
 O SKU Developer do APIM é adequado para POC e não possui SLA de produção. A entrada em produção exige um SKU com SLA, capacidade, rede e disponibilidade compatíveis com os requisitos do cliente.
+
+## Passo 8: comprovar a retirada do legado
+
+O relatório de retirada consulta traces de roteamento e requests correlacionados no Application Insights:
+
+```powershell
+python .\retirement_report.py `
+    --application-insights-name '<nome-do-componente>' `
+    --subscription-id '<subscription-id>' `
+    --resource-group '<resource-group>' `
+    --legacy-p95-baseline-ms '<baseline-aprovado-em-ms>' `
+    --rollback-rehearsed `
+    --parity-passed `
+    --owner-approved `
+    --require-ready `
+    --output .\retirement-report.json
+```
+
+O resultado só marca `ready: true` quando todos os critérios passam: telemetria completa, tráfego v1 observado, zero tráfego legado por 14 dias, sucesso v1 mínimo de 99,5%, p95 v1 até 10% acima do baseline legado, paridade aprovada, rollback ensaiado e aprovação do responsável. Dados ou aprovações ausentes produzem uma decisão não pronta. As janelas de 7, 14 e 30 dias permanecem no artefato para revisão.
+
+O workflow manual `Live migration gate` executa o corpus e, para o alvo APIM, gera essa evidência. Informe os inputs de Application Insights e resource group. Use `enforce_retirement_ready` somente na execução que deve bloquear a decisão. Os artefatos `parity-report.json` e `retirement-report.json` são publicados mesmo em caso de falha.
 
 ## Plano de rollback
 

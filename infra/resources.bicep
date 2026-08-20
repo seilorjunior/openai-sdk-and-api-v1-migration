@@ -16,6 +16,42 @@ param publisherEmail string
 @description('Publisher organization shown by API Management.')
 param publisherName string
 
+@description('Azure OpenAI model name.')
+param modelName string
+
+@description('Azure OpenAI model version.')
+param modelVersion string
+
+@description('Azure OpenAI deployment SKU.')
+param modelDeploymentSku string
+
+@description('Azure OpenAI deployment capacity.')
+param modelDeploymentCapacity int
+
+@description('API Management SKU.')
+param apimSkuName string
+
+@description('API Management capacity.')
+param apimCapacity int
+
+@description('Maximum requests per subscription or caller IP in each 60-second window.')
+param rateLimitCallsPerMinute int
+
+@description('Number of APIM retries for transient 5xx backend responses.')
+param backendRetryCount int
+
+@description('Initial delay in seconds between APIM 5xx retries.')
+param backendRetryIntervalSeconds int
+
+@description('Percentage of APIM request telemetry sampled into Application Insights.')
+param telemetrySamplingPercentage int
+
+@description('Failed APIM requests in five minutes required to trigger the alert.')
+param failedRequestsAlertThreshold int
+
+@description('Alert recipient.')
+param alertEmail string
+
 @description('Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment.')
 param telemetryReaderPrincipalId string = ''
 
@@ -91,6 +127,10 @@ var cognitiveServicesUserRoleId = subscriptionResourceId(
 var monitoringReaderRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '43d0d8ad-25c7-4714-9337-8ba259a9fe05'
+)
+var monitoringMetricsPublisherRoleId = subscriptionResourceId(
+  'Microsoft.Authorization/roleDefinitions',
+  '3913510d-42f4-4e42-8a64-420c390055eb'
 )
 
 resource managedIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -172,15 +212,15 @@ resource modelDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-
   parent: azureOpenAI
   name: azureOpenAIDeploymentName
   sku: {
-    name: 'GlobalStandard'
-    capacity: 10
+    name: modelDeploymentSku
+    capacity: modelDeploymentCapacity
   }
   properties: {
-    currentCapacity: 10
+    currentCapacity: modelDeploymentCapacity
     model: {
       format: 'OpenAI'
-      name: 'gpt-4.1-mini'
-      version: '2025-04-14'
+      name: modelName
+      version: modelVersion
     }
     raiPolicyName: 'Microsoft.DefaultV2'
     versionUpgradeOption: 'OnceCurrentVersionExpired'
@@ -202,6 +242,7 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: logAnalytics.id
+    IngestionMode: 'LogAnalytics'
   }
 }
 
@@ -219,8 +260,8 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   name: apimServiceName
   location: apimLocation
   sku: {
-    name: 'Developer'
-    capacity: 1
+    name: apimSkuName
+    capacity: apimCapacity
   }
   identity: {
     type: 'UserAssigned'
@@ -245,17 +286,31 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   }
 }
 
+resource apimTelemetryPublisher 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(applicationInsights.id, managedIdentity.id, monitoringMetricsPublisherRoleId)
+  scope: applicationInsights
+  properties: {
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: monitoringMetricsPublisherRoleId
+  }
+}
+
 resource apimApplicationInsightsLogger 'Microsoft.ApiManagement/service/loggers@2024-05-01' = {
   parent: apim
   name: 'migration-application-insights'
   properties: {
     loggerType: 'applicationInsights'
     credentials: {
-      instrumentationKey: applicationInsights.properties.InstrumentationKey
+      connectionString: applicationInsights.properties.ConnectionString
+      identityClientId: managedIdentity.properties.clientId
     }
     isBuffered: true
     resourceId: applicationInsights.id
   }
+  dependsOn: [
+    apimTelemetryPublisher
+  ]
 }
 
 resource cognitiveServicesUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -322,7 +377,7 @@ resource openAIAPIDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2
     metrics: true
     sampling: {
       samplingType: 'fixed'
-      percentage: 100
+      percentage: telemetrySamplingPercentage
     }
     verbosity: 'information'
   }
@@ -350,7 +405,19 @@ resource openAIOperationPolicies 'Microsoft.ApiManagement/service/apis/operation
           replace(
             replace(
               replace(
-                loadTextContent('../samples/apim-unified-chat-policy.xml'),
+                replace(
+                  replace(
+                    replace(
+                      loadTextContent('../samples/apim-unified-chat-policy.xml'),
+                      '__RATE_LIMIT_CALLS__',
+                      string(rateLimitCallsPerMinute)
+                    ),
+                    '__RETRY_COUNT__',
+                    string(backendRetryCount)
+                  ),
+                  '__RETRY_INTERVAL__',
+                  string(backendRetryIntervalSeconds)
+                ),
                 '__APIM_IDENTITY_CLIENT_ID__',
                 managedIdentity.properties.clientId
               ),
@@ -365,7 +432,19 @@ resource openAIOperationPolicies 'Microsoft.ApiManagement/service/apis/operation
         )
       : replace(
           replace(
-            loadTextContent('../samples/apim-policy.xml'),
+            replace(
+              replace(
+                replace(
+                  loadTextContent('../samples/apim-policy.xml'),
+                  '__RATE_LIMIT_CALLS__',
+                  string(rateLimitCallsPerMinute)
+                ),
+                '__RETRY_COUNT__',
+                string(backendRetryCount)
+              ),
+              '__RETRY_INTERVAL__',
+              string(backendRetryIntervalSeconds)
+            ),
             '__APIM_IDENTITY_CLIENT_ID__',
             managedIdentity.properties.clientId
           ),
@@ -434,7 +513,7 @@ resource alertActionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
     emailReceivers: [
       {
         name: 'APIM publisher'
-        emailAddress: publisherEmail
+        emailAddress: alertEmail
         useCommonAlertSchema: true
       }
     ]
@@ -461,7 +540,7 @@ resource failedRequestsAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
           metricNamespace: 'Microsoft.ApiManagement/service'
           metricName: 'FailedRequests'
           operator: 'GreaterThan'
-          threshold: 5
+          threshold: failedRequestsAlertThreshold
           timeAggregation: 'Total'
           criterionType: 'StaticThresholdCriterion'
         }

@@ -1,3 +1,12 @@
+<#
+.SYNOPSIS
+Rotates the APIM subscription key used by the protected GitHub environment.
+
+.DESCRIPTION
+Created to rotate APIM credentials without an outage or exposing key values. It
+regenerates the selected key slot, updates the GitHub environment secret, verifies
+the new key with a smoke test, and invalidates the old slot only after validation.
+#>
 param(
     [Parameter(Mandatory)] [string] $ResourceGroup,
     [Parameter(Mandatory)] [string] $ServiceName,

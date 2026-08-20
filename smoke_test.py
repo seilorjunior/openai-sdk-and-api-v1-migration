@@ -89,6 +89,7 @@ def send_chat(
     model: str,
     prompt: str,
     max_tokens: int = 80,
+    request_options: dict[str, Any] | None = None,
 ) -> ChatResult:
     """Send one chat request through an already-built client and return the common result.
 
@@ -99,21 +100,20 @@ def send_chat(
 
     messages = cast(Any, [{"role": "user", "content": prompt}])
     response: Any
+    completion_options = {"max_tokens": max_tokens, "temperature": 0, **(request_options or {})}
     if api_mode == "legacy" and target == "direct":
         legacy_client = cast(ChatCompletionsClient, client)
         response = legacy_client.complete(
             model=model,
             messages=messages,
-            max_tokens=max_tokens,
-            temperature=0,
+            **cast(Any, completion_options),
         )
     else:
         v1_client = cast(OpenAI, client)
         response = v1_client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=max_tokens,
-            temperature=0,
+            **cast(Any, completion_options),
         )
 
     choice = response.choices[0]
@@ -129,10 +129,16 @@ def send_chat(
     )
 
 
-def invoke_chat(api_mode: ApiMode | None, target: Target, prompt: str, max_tokens: int = 80) -> ChatResult:
+def invoke_chat(
+    api_mode: ApiMode | None,
+    target: Target,
+    prompt: str,
+    max_tokens: int = 80,
+    request_options: dict[str, Any] | None = None,
+) -> ChatResult:
     client = build_chat_client(api_mode, target)
     model = require_env("AZURE_OPENAI_DEPLOYMENT")
-    return send_chat(client, api_mode, target, model, prompt, max_tokens)
+    return send_chat(client, api_mode, target, model, prompt, max_tokens, request_options)
 
 
 async def cancellation_probe(target: str, cancel_after_seconds: float) -> bool:

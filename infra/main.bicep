@@ -16,6 +16,50 @@ param publisherEmail string
 @description('Publisher organization shown by API Management.')
 param publisherName string = 'OpenAI SDK migration POC'
 
+@description('Azure OpenAI model name.')
+param modelName string = 'gpt-4.1-mini'
+
+@description('Azure OpenAI model version.')
+param modelVersion string = '2025-04-14'
+
+@description('Azure OpenAI deployment SKU.')
+param modelDeploymentSku string = 'GlobalStandard'
+
+@minValue(1)
+@description('Azure OpenAI deployment capacity.')
+param modelDeploymentCapacity int = 10
+
+@description('API Management SKU.')
+param apimSkuName string = 'Developer'
+
+@minValue(0)
+@description('API Management capacity. Consumption uses zero; dedicated SKUs use one or more units.')
+param apimCapacity int = 1
+
+@minValue(1)
+@description('Maximum requests per subscription or caller IP in each 60-second window.')
+param rateLimitCallsPerMinute int = 60
+
+@minValue(0)
+@description('Number of APIM retries for transient 5xx backend responses.')
+param backendRetryCount int = 2
+
+@minValue(1)
+@description('Initial delay in seconds between APIM 5xx retries.')
+param backendRetryIntervalSeconds int = 1
+
+@minValue(0)
+@maxValue(100)
+@description('Percentage of APIM request telemetry sampled into Application Insights.')
+param telemetrySamplingPercentage int = 100
+
+@minValue(0)
+@description('Failed APIM requests in five minutes required to trigger the alert.')
+param failedRequestsAlertThreshold int = 5
+
+@description('Alert recipient. Defaults to the APIM publisher email when empty.')
+param alertEmail string = ''
+
 @description('Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment.')
 param telemetryReaderPrincipalId string = ''
 
@@ -52,6 +96,18 @@ module resources 'resources.bicep' = {
     location: location
     publisherEmail: publisherEmail
     publisherName: publisherName
+    modelName: modelName
+    modelVersion: modelVersion
+    modelDeploymentSku: modelDeploymentSku
+    modelDeploymentCapacity: modelDeploymentCapacity
+    apimSkuName: apimSkuName
+    apimCapacity: apimCapacity
+    rateLimitCallsPerMinute: rateLimitCallsPerMinute
+    backendRetryCount: backendRetryCount
+    backendRetryIntervalSeconds: backendRetryIntervalSeconds
+    telemetrySamplingPercentage: telemetrySamplingPercentage
+    failedRequestsAlertThreshold: failedRequestsAlertThreshold
+    alertEmail: empty(alertEmail) ? publisherEmail : alertEmail
     resourceToken: resourceToken
     telemetryReaderPrincipalId: telemetryReaderPrincipalId
     enablePrivateNetworking: enablePrivateNetworking
