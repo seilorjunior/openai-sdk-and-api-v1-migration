@@ -13,6 +13,7 @@ venv/
 .env.*
 email.txt
 apim-snapshot.json
+.github/workflows/live-migration-gate.yml
 
 # Local tool logs
 azd-*.log
