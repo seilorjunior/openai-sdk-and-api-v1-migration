@@ -6,10 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
 

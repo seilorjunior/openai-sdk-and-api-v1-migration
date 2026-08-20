@@ -5,6 +5,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 venv/
 
@@ -13,6 +15,8 @@ venv/
 .env.*
 email.txt
 apim-snapshot.json
+*apim-snapshot*.json
+*.load-test-report.json
 .github/workflows/live-migration-gate.yml
 
 # Local tool logs

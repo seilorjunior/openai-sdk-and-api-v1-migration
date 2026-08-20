@@ -12,10 +12,10 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 LEGACY_PATTERNS = {
     "azure-ai-inference /models route": re.compile(r"(?:services\.ai\.azure\.com)?/models(?:/|\b)", re.I),
@@ -38,6 +38,89 @@ UNIFIED_CHAT_POLICY_MARKERS = (
     "invalid_api_mode",
 )
 
+REDACTED = "***REDACTED***"
+
+# Field/key names that are always treated as secret regardless of value shape,
+# such as backend credential headers, query parameters, and connection secrets.
+SECRET_FIELD_NAMES = {
+    "authorization",
+    "parameter",
+    "header",
+    "query",
+    "certificateid",
+    "certificateids",
+    "clientsecret",
+    "client_secret",
+    "accesstoken",
+    "access_token",
+    "connectionstring",
+    "connection_string",
+    "subscriptionkey",
+    "subscription_key",
+    "ocp-apim-subscription-key",
+    "api-key",
+    "apikey",
+    "password",
+    "secret",
+    "sharedaccesskey",
+    "accountkey",
+    "primarykey",
+    "secondarykey",
+}
+
+# Inline text patterns that redact secret material embedded in free-form
+# strings such as policy XML, URLs, or ARM error messages, while preserving
+# enough surrounding context to keep findings readable.
+TEXT_SECRET_PATTERNS = [
+    re.compile(r"(authorization\s*[:=]\s*[\"']?)(bearer|basic)?\s*([A-Za-z0-9\-_.~+/]{8,}=*)", re.I),
+    re.compile(r"(ocp-apim-subscription-key\s*[:=]\s*[\"']?)([^\s\"'<>&]{4,})", re.I),
+    re.compile(r"(api[-_]?key\s*[:=]\s*[\"']?)([^\s\"'<>&]{4,})", re.I),
+    re.compile(r"(sharedaccesskey\s*=\s*)([^;\"'<>\s]{4,})", re.I),
+    re.compile(r"(accountkey\s*=\s*)([^;\"'<>\s]{4,})", re.I),
+    re.compile(r"([?&]sig=)([^&\"'<>\s]{4,})", re.I),
+    re.compile(r"(client[-_]?secret\s*[:=]\s*[\"']?)([^\s\"'<>&]{4,})", re.I),
+]
+
+
+def redact_text(value: str) -> str:
+    """Redact secret-shaped substrings while keeping the surrounding text."""
+
+    redacted = value
+    for pattern in TEXT_SECRET_PATTERNS:
+        redacted = pattern.sub(lambda match: f"{match.group(1)}{REDACTED}", redacted)
+    return redacted
+
+
+def redact_value(key: str | None, value: Any, force_secret: bool = False) -> Any:
+    normalized_key = (key or "").strip().lower()
+    is_secret_context = force_secret or normalized_key in SECRET_FIELD_NAMES
+    if isinstance(value, str):
+        if is_secret_context:
+            return REDACTED
+        return redact_text(value)
+    if isinstance(value, dict):
+        return {name: redact_value(name, item, is_secret_context) for name, item in value.items()}
+    if isinstance(value, list):
+        return [redact_value(key, item, is_secret_context) for item in value]
+    return value
+
+
+def sanitize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of an APIM snapshot with secret material redacted.
+
+    This is applied before writing any snapshot to disk (``--export``) and
+    before including excerpts in validation findings, so authorization
+    headers, subscription keys, named-value secrets, backend credentials,
+    tokens, and connection strings are never exposed.
+    """
+
+    sanitized = redact_value(None, snapshot)
+    for named_value in sanitized.get("namedValues", []) or []:
+        properties = named_value.get("properties", {}) if isinstance(named_value, dict) else {}
+        if isinstance(properties, dict) and properties.get("secret") and "value" in properties:
+            properties["value"] = REDACTED
+    return sanitized
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -59,7 +142,7 @@ def run_az_json(arguments: list[str]) -> Any:
     environment["PYTHONUTF8"] = "1"
     result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", env=environment, check=False)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"Azure CLI failed: {' '.join(command)}")
+        raise RuntimeError(redact_text(result.stderr.strip()) or f"Azure CLI failed: {' '.join(command)}")
     return json.loads(result.stdout.lstrip("\ufeff"))
 
 
@@ -74,9 +157,10 @@ def get_policy(
     if subscription_id:
         token_arguments.extend(["--subscription", subscription_id])
     token = run_az_json(token_arguments)["accessToken"]
+    authorization_header = "Bearer " + token
     request = urllib.request.Request(
         f"https://management.azure.com{resource_id}?api-version={api_version}",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": authorization_header},
     )
     try:
         with urllib.request.urlopen(request) as response:
@@ -195,7 +279,8 @@ def validate_snapshot(snapshot: dict[str, Any]) -> list[Finding]:
             continue
         for description, pattern in LEGACY_PATTERNS.items():
             if pattern.search(value):
-                findings.append(Finding("ERROR", description, f"{location} contains legacy configuration: {value[:180]}"))
+                excerpt = redact_text(value)[:180]
+                findings.append(Finding("ERROR", description, f"{location} contains legacy configuration: {excerpt}"))
 
     combined_policy = "\n".join(value for location, value in all_text if "policy" in location.lower())
     authentication_text = "\n".join(value for location, value in all_text if "policy" in location.lower() or "credentials" in location.lower())
@@ -273,7 +358,7 @@ def main() -> int:
         snapshot = get_apim_snapshot(args.resource_group, args.service_name, args.api_id, args.subscription_id)
 
     if args.export:
-        args.export.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        args.export.write_text(json.dumps(sanitize_snapshot(snapshot), indent=2), encoding="utf-8")
     findings = validate_snapshot(snapshot)
     print_report(findings)
     return 1 if any(finding.severity == "ERROR" for finding in findings) else 0

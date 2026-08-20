@@ -9,14 +9,35 @@ import math
 import os
 import statistics
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
-from smoke_test import ApiMode, invoke_chat, require_env
+from azure.core.exceptions import AzureError, ServiceRequestError, ServiceResponseError
+from openai import APIConnectionError, APIStatusError, APITimeoutError
+
+from smoke_test import ApiMode, build_chat_client, require_env, send_chat
 
 MAX_REQUESTS_PER_MODE = 10_000
 LARGE_LOAD_THRESHOLD = 1_000
+MAX_WARMUP_REQUESTS = 100
+
+# Failures caused by the network/transport layer (connection resets, timeouts,
+# DNS failures) are reported separately from failures caused by the request
+# itself (HTTP error responses, invalid configuration) so load-test operators
+# can tell infrastructure flakiness apart from real regressions.
+TRANSPORT_FAILURE_TYPES = (
+    APIConnectionError,
+    APITimeoutError,
+    ServiceRequestError,
+    ServiceResponseError,
+    ConnectionError,
+    TimeoutError,
+)
+REQUEST_FAILURE_TYPES = (APIStatusError, AzureError, ValueError)
+
+_thread_local = threading.local()
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -25,9 +46,38 @@ def percentile(values: list[float], quantile: float) -> float:
     return ordered[index]
 
 
+def classify_failure(error: BaseException) -> str:
+    if isinstance(error, TRANSPORT_FAILURE_TYPES):
+        return "transport"
+    if isinstance(error, REQUEST_FAILURE_TYPES):
+        return "request"
+    return "other"
+
+
+def get_thread_client(target: str, api_mode: ApiMode) -> Any:
+    """Return a client cached on the current worker thread, building it once.
+
+    Reusing one client per worker thread (instead of building a new client for
+    every request) avoids measuring connection/authentication setup on every
+    call and keeps the load test focused on request latency.
+    """
+
+    cache = getattr(_thread_local, "clients", None)
+    if cache is None:
+        cache = {}
+        _thread_local.clients = cache
+    client = cache.get(api_mode)
+    if client is None:
+        client = build_chat_client(api_mode, target)
+        cache[api_mode] = client
+    return client
+
+
 def invoke(target: str, prompt: str, api_mode: ApiMode = "v1") -> dict[str, Any]:
+    model = require_env("AZURE_OPENAI_DEPLOYMENT")
+    client = get_thread_client(target, api_mode)
     started = time.perf_counter()
-    result = invoke_chat(api_mode, target, prompt, max_tokens=40)
+    result = send_chat(client, api_mode, target, model, prompt, max_tokens=40)
     return {
         "latency_ms": (time.perf_counter() - started) * 1000,
         "input_tokens": result.input_tokens,
@@ -67,12 +117,28 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Confirm loads above 1,000 requests per mode.",
     )
+    parser.add_argument(
+        "--warmup-requests",
+        type=int,
+        default=0,
+        help=f"Unmeasured requests per mode to run before timing (0-{MAX_WARMUP_REQUESTS}, default 0).",
+    )
     return parser.parse_args()
+
+
+def run_warmup(target: str, api_mode: ApiMode, warmup_requests: int, concurrency: int, prompt: str) -> None:
+    if warmup_requests <= 0:
+        return
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(invoke, target, prompt, api_mode) for _ in range(warmup_requests)]
+        for future in as_completed(futures):
+            future.exception()  # Discard warm-up successes and failures alike.
 
 
 def run_load(target: str, api_mode: ApiMode, requests: int, concurrency: int, prompt: str) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
-    failures: dict[str, int] = {}
+    failures_by_type: dict[str, int] = {}
+    failures_by_category: dict[str, int] = {}
     failure_examples: dict[str, str] = {}
     started = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -82,7 +148,9 @@ def run_load(target: str, api_mode: ApiMode, requests: int, concurrency: int, pr
                 results.append(future.result())
             except Exception as error:
                 error_name = type(error).__name__
-                failures[error_name] = failures.get(error_name, 0) + 1
+                failures_by_type[error_name] = failures_by_type.get(error_name, 0) + 1
+                category = classify_failure(error)
+                failures_by_category[category] = failures_by_category.get(category, 0) + 1
                 failure_examples.setdefault(error_name, str(error)[:300])
 
     elapsed = time.perf_counter() - started
@@ -95,7 +163,8 @@ def run_load(target: str, api_mode: ApiMode, requests: int, concurrency: int, pr
         "requested": requests,
         "succeeded": len(results),
         "failed": requests - len(results),
-        "failures_by_type": failures,
+        "failures_by_type": failures_by_type,
+        "failures_by_category": failures_by_category,
         "failure_examples": failure_examples,
         "throughput_rps": round(len(results) / elapsed, 2),
         "input_tokens": input_tokens,
@@ -120,6 +189,8 @@ def main() -> int:
         raise SystemExit("loads above 1,000 requests per mode require --confirm-large-load")
     if not 1 <= args.concurrency <= min(args.requests, 100):
         raise SystemExit("--concurrency must be between 1 and min(requests, 100)")
+    if not 0 <= args.warmup_requests <= MAX_WARMUP_REQUESTS:
+        raise SystemExit(f"--warmup-requests must be between 0 and {MAX_WARMUP_REQUESTS}")
 
     modes: tuple[ApiMode, ...] = ("v1", "legacy") if args.api_mode == "both" else (args.api_mode,)
     try:
@@ -127,6 +198,8 @@ def main() -> int:
     except ValueError as error:
         print(f"Load test configuration error: {error}", file=sys.stderr)
         return 2
+    for mode in modes:
+        run_warmup(args.target, mode, args.warmup_requests, args.concurrency, args.prompt)
     reports = [run_load(args.target, mode, args.requests, args.concurrency, args.prompt) for mode in modes]
     output = {
         "target": args.target,
