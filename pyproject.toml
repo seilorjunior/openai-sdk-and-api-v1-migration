@@ -1,0 +1,47 @@
+[project]
+name = "openai-sdk-and-api-v1-migration"
+version = "0.1.0"
+description = "Azure OpenAI SDK/API v1 migration POC with APIM dual-mode validation."
+requires-python = ">=3.10,<3.14"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "E501",   # Pre-existing lines exceed 120 chars; not reformatting unrelated files.
+    "E731",   # capability_test.py assigns small dispatch lambdas by design.
+    "SIM117", # Some existing tests nest `with` blocks for readability.
+]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "smoke_test",
+    "capability_test",
+    "compare_responses",
+    "load_test",
+    "validate_apim",
+]
+
+[tool.mypy]
+python_version = "3.10"
+files = [
+    "smoke_test.py",
+    "capability_test.py",
+    "compare_responses.py",
+    "load_test.py",
+    "validate_apim.py",
+]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true

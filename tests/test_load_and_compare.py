@@ -1,7 +1,9 @@
+import os
 import unittest
 from argparse import Namespace
-import os
 from unittest.mock import patch
+
+import httpx
 
 import compare_responses
 import load_test
@@ -11,6 +13,75 @@ class LoadAndCompareTests(unittest.TestCase):
     def test_percentile_uses_nearest_rank(self) -> None:
         self.assertEqual(load_test.percentile([10, 20, 30, 40], 0.95), 40)
 
+    def test_classify_failure_detects_transport_errors(self) -> None:
+        from openai import APIConnectionError
+
+        request = httpx.Request("POST", "https://example.test/openai/v1/chat/completions")
+        error = APIConnectionError(request=request)
+
+        self.assertEqual(load_test.classify_failure(error), "transport")
+
+    def test_classify_failure_detects_request_errors(self) -> None:
+        self.assertEqual(load_test.classify_failure(ValueError("bad config")), "request")
+
+    def test_classify_failure_defaults_to_other(self) -> None:
+        self.assertEqual(load_test.classify_failure(RuntimeError("unexpected")), "other")
+
+    def test_estimate_cost_is_none_without_configured_rates(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(load_test.estimate_cost(1000, 1000))
+
+    def test_estimate_cost_uses_configured_rates(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"OPENAI_INPUT_USD_PER_1M_TOKENS": "1", "OPENAI_OUTPUT_USD_PER_1M_TOKENS": "2"},
+            clear=True,
+        ):
+            cost = load_test.estimate_cost(1_000_000, 500_000)
+
+        self.assertEqual(cost, 2.0)
+
+    @patch("load_test.build_chat_client")
+    def test_thread_client_is_built_once_and_reused_per_mode(self, build_chat_client) -> None:
+        load_test._thread_local.clients = {}
+        build_chat_client.return_value = object()
+
+        first = load_test.get_thread_client("apim", "v1")
+        second = load_test.get_thread_client("apim", "v1")
+
+        self.assertIs(first, second)
+        build_chat_client.assert_called_once_with("v1", "apim")
+
+    @patch("load_test.build_chat_client")
+    def test_thread_client_is_cached_separately_per_api_mode(self, build_chat_client) -> None:
+        load_test._thread_local.clients = {}
+        build_chat_client.side_effect = [object(), object()]
+
+        v1_client = load_test.get_thread_client("apim", "v1")
+        legacy_client = load_test.get_thread_client("apim", "legacy")
+
+        self.assertIsNot(v1_client, legacy_client)
+        self.assertEqual(build_chat_client.call_count, 2)
+
+    @patch("load_test.invoke")
+    def test_run_load_separates_transport_and_request_failure_categories(self, invoke) -> None:
+        from openai import APIConnectionError
+
+        request = httpx.Request("POST", "https://example.test/openai/v1/chat/completions")
+        invoke.side_effect = [
+            APIConnectionError(request=request),
+            ValueError("Set the AZURE_OPENAI_DEPLOYMENT environment variable."),
+            {"latency_ms": 10.0, "input_tokens": 1, "output_tokens": 1},
+        ]
+
+        report = load_test.run_load("direct", "v1", 3, 1, "ready")
+
+        self.assertEqual(report["succeeded"], 1)
+        self.assertEqual(report["failed"], 2)
+        self.assertEqual(report["failures_by_category"]["transport"], 1)
+        self.assertEqual(report["failures_by_category"]["request"], 1)
+
+    @patch("load_test.run_warmup")
     @patch("load_test.run_load")
     @patch("load_test.validate_configuration")
     @patch("load_test.parse_args")
@@ -19,6 +90,7 @@ class LoadAndCompareTests(unittest.TestCase):
         parse_args,
         validate_configuration,
         run_load,
+        run_warmup,
     ) -> None:
         parse_args.return_value = Namespace(
             target="apim",
@@ -27,6 +99,7 @@ class LoadAndCompareTests(unittest.TestCase):
             concurrency=2,
             prompt="ready",
             confirm_large_load=False,
+            warmup_requests=0,
         )
         run_load.side_effect = [
             {"api_mode": "v1", "failed": 0},
@@ -54,9 +127,25 @@ class LoadAndCompareTests(unittest.TestCase):
             concurrency=1,
             prompt="ready",
             confirm_large_load=False,
+            warmup_requests=0,
         )
 
         with self.assertRaisesRegex(SystemExit, "require --confirm-large-load"):
+            load_test.main()
+
+    @patch("load_test.parse_args")
+    def test_warmup_requests_out_of_range_is_rejected(self, parse_args) -> None:
+        parse_args.return_value = Namespace(
+            target="apim",
+            api_mode="v1",
+            requests=4,
+            concurrency=1,
+            prompt="ready",
+            confirm_large_load=False,
+            warmup_requests=load_test.MAX_WARMUP_REQUESTS + 1,
+        )
+
+        with self.assertRaisesRegex(SystemExit, "--warmup-requests must be between"):
             load_test.main()
 
     @patch.dict(os.environ, {}, clear=True)
@@ -77,6 +166,137 @@ class LoadAndCompareTests(unittest.TestCase):
 
         self.assertTrue(report["passed"])
         self.assertEqual(report["output_length_ratio"], 1.5)
+
+    def test_compare_handles_zero_length_output_on_both_sides_without_division_error(self) -> None:
+        legacy = {
+            "output_nonempty": False,
+            "finish_reason": "content_filter",
+            "tool_call_count": 0,
+            "output_length": 0,
+        }
+        current = {**legacy}
+
+        report = compare_responses.compare(legacy, current, 2.0)
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["output_length_ratio"], 0.0)
+
+    def test_compare_handles_zero_length_output_on_one_side_without_division_error(self) -> None:
+        legacy = {
+            "output_nonempty": True,
+            "finish_reason": "stop",
+            "tool_call_count": 0,
+            "output_length": 0,
+        }
+        current = {**legacy, "output_nonempty": False, "output_length": 12}
+
+        report = compare_responses.compare(legacy, current, 2.0)
+
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["nonempty_match"])
+        self.assertEqual(report["output_length_ratio"], 12.0)
+
+    def test_compare_fails_on_finish_reason_mismatch(self) -> None:
+        legacy = {
+            "output_nonempty": True,
+            "finish_reason": "stop",
+            "tool_call_count": 0,
+            "output_length": 10,
+        }
+        current = {**legacy, "finish_reason": "length"}
+
+        report = compare_responses.compare(legacy, current, 2.0)
+
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["finish_reason_match"])
+
+    def test_compare_fails_on_tool_call_count_mismatch(self) -> None:
+        legacy = {
+            "output_nonempty": True,
+            "finish_reason": "tool_calls",
+            "tool_call_count": 1,
+            "output_length": 10,
+        }
+        current = {**legacy, "tool_call_count": 0}
+
+        report = compare_responses.compare(legacy, current, 2.0)
+
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["tool_call_count_match"])
+
+    def test_compare_fails_when_length_ratio_exceeds_limit(self) -> None:
+        legacy = {
+            "output_nonempty": True,
+            "finish_reason": "stop",
+            "tool_call_count": 0,
+            "output_length": 10,
+        }
+        current = {**legacy, "output_length": 100}
+
+        report = compare_responses.compare(legacy, current, 2.0)
+
+        self.assertFalse(report["passed"])
+        self.assertFalse(report["checks"]["length_ratio_within_limit"])
+        self.assertEqual(report["output_length_ratio"], 10.0)
+
+    def test_normalize_maps_chat_result_fields(self) -> None:
+        from smoke_test import ChatResult
+
+        result = ChatResult(
+            model="test-model",
+            content=" ready ",
+            finish_reason="stop",
+            input_tokens=3,
+            output_tokens=1,
+            tool_call_count=0,
+        )
+
+        normalized = compare_responses.normalize(result)
+
+        self.assertEqual(
+            normalized,
+            {
+                "output_nonempty": True,
+                "finish_reason": "stop",
+                "tool_call_count": 0,
+                "output_length": len(" ready "),
+                "input_tokens": 3,
+                "output_tokens": 1,
+            },
+        )
+
+    def test_normalize_reports_empty_output(self) -> None:
+        from smoke_test import ChatResult
+
+        result = ChatResult(
+            model="test-model",
+            content="   ",
+            finish_reason="content_filter",
+            input_tokens=0,
+            output_tokens=0,
+            tool_call_count=0,
+        )
+
+        normalized = compare_responses.normalize(result)
+
+        self.assertFalse(normalized["output_nonempty"])
+        self.assertEqual(normalized["output_length"], 3)
+
+    @patch("compare_responses.v1_chat")
+    @patch("compare_responses.legacy_chat")
+    def test_main_reports_error_type_and_nonzero_exit_on_sdk_failure(self, legacy_chat, v1_chat) -> None:
+        legacy_chat.side_effect = ValueError("Set the AZURE_OPENAI_BASE_URL environment variable.")
+
+        with patch(
+            "compare_responses.parse_args",
+            return_value=Namespace(target="direct", prompt="ready", max_length_ratio=2.0),
+        ), patch("builtins.print") as mock_print:
+            exit_code = compare_responses.main()
+
+        self.assertEqual(exit_code, 1)
+        printed = mock_print.call_args[0][0]
+        self.assertIn("ValueError", printed)
+        self.assertNotIn("AZURE_OPENAI_BASE_URL", printed)
 
 
 if __name__ == "__main__":

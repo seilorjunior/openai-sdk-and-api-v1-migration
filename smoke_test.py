@@ -82,9 +82,21 @@ def build_chat_client(api_mode: ApiMode | None, target: Target) -> OpenAI | Chat
     )
 
 
-def invoke_chat(api_mode: ApiMode | None, target: Target, prompt: str, max_tokens: int = 80) -> ChatResult:
-    client = build_chat_client(api_mode, target)
-    model = require_env("AZURE_OPENAI_DEPLOYMENT")
+def send_chat(
+    client: OpenAI | ChatCompletionsClient,
+    api_mode: ApiMode | None,
+    target: Target,
+    model: str,
+    prompt: str,
+    max_tokens: int = 80,
+) -> ChatResult:
+    """Send one chat request through an already-built client and return the common result.
+
+    Callers that issue many requests (for example, load_test.py) should build the
+    client once with build_chat_client() and call this function per request instead
+    of invoke_chat(), which builds a new client every time.
+    """
+
     messages = [{"role": "user", "content": prompt}]
     if api_mode == "legacy" and target == "direct":
         response = client.complete(
@@ -112,6 +124,12 @@ def invoke_chat(api_mode: ApiMode | None, target: Target, prompt: str, max_token
         output_tokens=usage.completion_tokens if usage else 0,
         tool_call_count=len(tool_calls),
     )
+
+
+def invoke_chat(api_mode: ApiMode | None, target: Target, prompt: str, max_tokens: int = 80) -> ChatResult:
+    client = build_chat_client(api_mode, target)
+    model = require_env("AZURE_OPENAI_DEPLOYMENT")
+    return send_chat(client, api_mode, target, model, prompt, max_tokens)
 
 
 async def cancellation_probe(target: str, cancel_after_seconds: float) -> bool:

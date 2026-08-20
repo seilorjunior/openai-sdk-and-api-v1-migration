@@ -1,0 +1,11 @@
+# Development-only dependencies for linting, type-checking, and running the
+# deterministic offline test suite. Install alongside requirements.txt:
+#
+#   python -m pip install -r requirements.txt -r requirements-dev.txt
+#
+# These are not required to run smoke_test.py, capability_test.py,
+# compare_responses.py, load_test.py, or validate_apim.py against a live
+# environment; they only support local/CI quality checks.
+pytest>=8.0,<10
+ruff>=0.6,<1
+mypy>=1.10,<3

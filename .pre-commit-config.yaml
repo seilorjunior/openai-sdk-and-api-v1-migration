@@ -1,0 +1,12 @@
+# Optional local git hook checks. Install with:
+#   python -m pip install -r requirements-dev.txt pre-commit
+#   pre-commit install
+#
+# These hooks are opt-in and are not required to run the test suite, build the
+# Bicep templates, or use any of the CLI entry points.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]

@@ -47,12 +47,15 @@ The dual policy applies only to the existing chat operation. It does not fall ba
 | `smoke_test.py` | Direct/APIM smoke tests for default, v1, and legacy modes. |
 | `capability_test.py` | Opt-in probes for OpenAI API v1 capabilities. |
 | `compare_responses.py` | Behavioral comparison without logging generated text. |
-| `load_test.py` | Bounded load test with latency, token, and optional cost reporting. |
-| `validate_apim.py` | Live or offline APIM configuration validation. |
+| `load_test.py` | Bounded load test with client reuse, optional warm-up, and latency/token/cost reporting. |
+| `validate_apim.py` | Live or offline APIM configuration validation with secret redaction. |
+| `pyproject.toml` | pytest, Ruff, and mypy configuration. |
+| `requirements.txt` | Runtime dependencies (v1 SDK plus the legacy comparison SDK). |
+| `requirements-dev.txt` | Optional pytest/Ruff/mypy tooling for local and CI quality checks. |
 
 ## Prerequisites
 
-- Python 3.10 or later.
+- Python 3.10 or later (CI validates 3.10-3.13).
 - Authenticated Azure CLI and Azure Developer CLI (`azd`).
 - Permission to create the resources in `infra/` and assign RBAC roles.
 - For smoke tests: an active deployment, an APIM key, and an Entra identity with access for direct testing.
@@ -64,12 +67,13 @@ The dual policy applies only to the existing chat operation. It does not fall ba
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt -r requirements-dev.txt
 python -m unittest discover -s tests -v
+ruff check .
 az bicep build --file infra/main.bicep --outfile infra/main.json
 ```
 
-The unit tests and Bicep build are deterministic and do not require live Azure resources. The `Migration validation` workflow runs the same checks on pushes to `main` and pull requests.
+The unit tests and Bicep build are deterministic, run fully offline, and never require live Azure credentials or network access. The `Migration validation` GitHub Actions workflow runs the same checks (pytest/unittest across a Python 3.10-3.13 matrix, `ruff check .`, an informational `mypy` pass, and `az bicep build`/`az bicep lint`) on pushes to `main` and pull requests. `requirements-dev.txt` is optional and only needed for linting/type-checking/pytest; it is not required to run `smoke_test.py`, `capability_test.py`, `compare_responses.py`, `load_test.py`, or `validate_apim.py`. An optional `.pre-commit-config.yaml` runs Ruff on commit if you choose to install `pre-commit`.
 
 ## Provision with Azure Developer CLI
 
@@ -130,6 +134,8 @@ python .\validate_apim.py --snapshot .\apim-snapshot.json
 ```
 
 Required criteria include a route or rewrite containing `/openai/v1`, a `chat/completions` operation, no `/models`, and backend authentication through managed identity or `api-key`. `api-version` and `/openai/deployments/` are allowed only in a complete `legacy` branch of the dual policy. See [APIM policy for OpenAI API v1](docs/apim-policy.md) for details. This linked policy guide is currently available in Portuguese.
+
+Exported snapshots and validation findings are sanitized before they are written or printed: authorization headers, subscription keys, named-value secrets marked `secret`, backend credential parameters/headers/query values, and connection-string-style secrets (`SharedAccessKey`, `AccountKey`, SAS `sig=` parameters) are replaced with `***REDACTED***`. `tests/test_validate_apim.py` proves this with synthetic fake secrets that must never appear in exported JSON or finding messages. Never commit a real `apim-snapshot.json`; `.gitignore` already excludes it.
 
 ## Run smoke tests
 
@@ -197,12 +203,12 @@ $env:OPENAI_SAFETY_PROMPT = '<approved-test-prompt>'
 python .\capability_test.py --target apim --capability safety
 ```
 
-The load test allows at most 10,000 requests per mode with concurrency capped at 100. Runs above 1,000 requests per mode require `--confirm-large-load`. Reports include percentiles, tokens, failure types, and cost only when approved rates are supplied:
+The load test allows at most 10,000 requests per mode with concurrency capped at 100. Runs above 1,000 requests per mode require `--confirm-large-load`. Each worker thread builds and reuses one client per API mode instead of creating a new client per request, so measured latency reflects request time rather than repeated client/connection setup. Use `--warmup-requests` (0-100, default 0) to run unmeasured requests first and prime connections/auth tokens before the timed run. Reports include percentiles, tokens, `failures_by_type` (exception class), `failures_by_category` (`transport` for connection/timeout failures, `request` for HTTP/configuration failures, `other` otherwise), and cost only when approved rates are supplied:
 
 ```powershell
 $env:OPENAI_INPUT_USD_PER_1M_TOKENS = '<rate>'
 $env:OPENAI_OUTPUT_USD_PER_1M_TOKENS = '<rate>'
-python .\load_test.py --target apim --api-mode both --requests 20 --concurrency 4
+python .\load_test.py --target apim --api-mode both --requests 20 --concurrency 4 --warmup-requests 5
 ```
 
 `--requests` applies to each mode. The example makes 20 v1 calls followed by 20 legacy calls. The process returns a non-zero exit code if any request fails.
@@ -289,6 +295,25 @@ The live gate is a synthetic canary, not percentage-based traffic splitting. For
 - An invalid APIM key returns `401` or `403`.
 - APIM authenticates to the backend through managed identity with the `https://ai.azure.com` audience.
 - APIM logs status and latency without capturing prompts, responses, or keys.
+
+## Environment variable reference
+
+| Variable | Used by | Purpose |
+| --- | --- | --- |
+| `AZURE_OPENAI_BASE_URL` | `smoke_test.py`, `load_test.py` (`--target direct`) | Direct v1 endpoint, e.g. `https://<resource>.openai.azure.com/openai/v1/`. |
+| `AZURE_OPENAI_DEPLOYMENT` | all scripts | Deployment/model name used for chat/capability calls. |
+| `APIM_OPENAI_BASE_URL` | `smoke_test.py`, `load_test.py`, `compare_responses.py` (`--target apim`) | Public APIM `/openai/v1/` base URL. |
+| `APIM_SUBSCRIPTION_KEY` | same as above | APIM subscription key sent as `Ocp-Apim-Subscription-Key`. Never log or print this value. |
+| `APIM_CLIENT_API_KEY` | `smoke_test.py` (`--target apim`) | Placeholder OpenAI SDK `api_key`; the real credential is enforced by APIM. |
+| `LEGACY_MODELS_BASE_URL` | `smoke_test.py` (`--api-mode legacy --target direct`) | Legacy `azure-ai-inference` `/models` endpoint used only for comparison. |
+| `OPENAI_TIMEOUT_SECONDS` | `smoke_test.py` client options | Per-request timeout; defaults to 30. |
+| `OPENAI_MAX_RETRIES` | `smoke_test.py` client options | SDK-managed retry attempts; defaults to 2. |
+| `OPENAI_INPUT_USD_PER_1M_TOKENS` / `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `load_test.py` | Optional approved rates enabling `estimated_cost_usd` in reports. |
+| `OPENAI_SAFETY_PROMPT` | `capability_test.py --capability safety` | Approved synthetic prompt for the safety/content-filter probe. |
+| `AZURE_SUBSCRIPTION_ID` | `validate_apim.py` (live mode), `azd`/`az` commands | Subscription containing the APIM service, when not inferred from `az account show`. |
+| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` | GitHub Actions live gate (OIDC) | Federated identity used only by the manual, protected live-migration workflow. |
+
+Set these with `$env:NAME = 'value'` in PowerShell for the current session only; never commit them. `smoke_test.py`, `capability_test.py`, `compare_responses.py`, and `load_test.py` fail fast with a clear message when a required variable is missing.
 
 ## POC evidence
 
