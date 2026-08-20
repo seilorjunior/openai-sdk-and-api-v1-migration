@@ -1,6 +1,6 @@
 # Runtime dependencies for the target OpenAI API v1 implementation.
 openai>=2.0,<3
-azure-identity>=1.19,<2
+azure-identity>=1.25.3,<2
 
 # Retained only for legacy azure-ai-inference comparison (smoke_test.py
 # --api-mode legacy, compare_responses.py). Remove after legacy retirement;
