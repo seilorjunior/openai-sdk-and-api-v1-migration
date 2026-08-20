@@ -1,0 +1,46 @@
+<policies>
+    <inbound>
+        <base />
+        <rate-limit-by-key calls="60" renewal-period="60" counter-key="@(context.Subscription?.Key ?? context.Request.IpAddress)" />
+        <set-header name="Authorization" exists-action="delete" />
+        <set-variable name="migration-api-mode" value="@{ var mode = context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).ToLowerInvariant(); return string.IsNullOrEmpty(mode) ? &quot;default-v1&quot; : (mode == &quot;v1&quot; || mode == &quot;legacy&quot; ? mode : &quot;invalid&quot;); }" />
+        <trace source="openai-v1-migration" severity="information">
+            <message>OpenAI migration request routed by API mode.</message>
+            <metadata name="api_mode" value="@((string)context.Variables[&quot;migration-api-mode&quot;])" />
+            <metadata name="request_id" value="@(context.RequestId.ToString())" />
+        </trace>
+        <choose>
+            <when condition="@(string.IsNullOrEmpty(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;)) || context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;v1&quot;, StringComparison.OrdinalIgnoreCase))">
+                <set-backend-service base-url="__V1_BACKEND_URL__" />
+                <rewrite-uri template="/openai/v1/chat/completions" copy-unmatched-params="false" />
+                <authentication-managed-identity resource="https://ai.azure.com" client-id="__APIM_IDENTITY_CLIENT_ID__" />
+            </when>
+            <when condition="@(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;legacy&quot;, StringComparison.OrdinalIgnoreCase))">
+                <set-backend-service base-url="__LEGACY_BACKEND_URL__" />
+                <rewrite-uri template="/openai/deployments/__DEPLOYMENT_NAME__/chat/completions?api-version=2024-10-21" copy-unmatched-params="false" />
+                <authentication-managed-identity resource="https://cognitiveservices.azure.com" client-id="__APIM_IDENTITY_CLIENT_ID__" />
+            </when>
+            <otherwise>
+                <return-response>
+                    <set-status code="400" reason="Invalid API mode" />
+                    <set-header name="Content-Type" exists-action="override">
+                        <value>application/json</value>
+                    </set-header>
+                    <set-body>{"error":{"code":"invalid_api_mode","message":"X-API-Mode must be v1 or legacy when provided."}}</set-body>
+                </return-response>
+            </otherwise>
+        </choose>
+        <set-header name="X-API-Mode" exists-action="delete" />
+    </inbound>
+    <backend>
+        <retry condition="@(context.Response != null &amp;&amp; context.Response.StatusCode &gt;= 500)" count="2" interval="1" delta="1" max-interval="4" first-fast-retry="false">
+            <forward-request buffer-request-body="true" />
+        </retry>
+    </backend>
+    <outbound>
+        <base />
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>

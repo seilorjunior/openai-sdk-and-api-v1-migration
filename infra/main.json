@@ -1,0 +1,811 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.41.2.15936",
+      "templateHash": "16507307055826049276"
+    }
+  },
+  "parameters": {
+    "environmentName": {
+      "type": "string",
+      "minLength": 1,
+      "metadata": {
+        "description": "Azure Developer CLI environment name."
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure region for all resources."
+      }
+    },
+    "apimLocation": {
+      "type": "string",
+      "defaultValue": "[parameters('location')]",
+      "metadata": {
+        "description": "Azure region for API Management. Can differ from the primary resource location during regional recovery."
+      }
+    },
+    "publisherEmail": {
+      "type": "string",
+      "metadata": {
+        "description": "Publisher email required by API Management."
+      }
+    },
+    "publisherName": {
+      "type": "string",
+      "defaultValue": "OpenAI SDK migration POC",
+      "metadata": {
+        "description": "Publisher organization shown by API Management."
+      }
+    },
+    "telemetryReaderPrincipalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment."
+      }
+    },
+    "enablePrivateNetworking": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy APIM into a VNet and disable public access to Azure OpenAI."
+      }
+    },
+    "apimSubnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the dedicated APIM subnet. Required when private networking is enabled."
+      }
+    },
+    "privateEndpointSubnetResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the subnet used by the Azure OpenAI private endpoint. Required when private networking is enabled."
+      }
+    },
+    "virtualNetworkResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the VNet linked to privatelink.openai.azure.com. Required when private networking is enabled."
+      }
+    }
+  },
+  "variables": {
+    "resourceGroupName": "[format('rg-{0}', parameters('environmentName'))]",
+    "resourceToken": "[uniqueString(subscription().id, parameters('location'), parameters('environmentName'))]",
+    "apimResourceToken": "[uniqueString(subscription().id, parameters('apimLocation'), parameters('environmentName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2024-11-01",
+      "name": "[variables('resourceGroupName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "azd-env-name": "[parameters('environmentName')]"
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('resources-{0}', variables('resourceToken'))]",
+      "resourceGroup": "[variables('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "apimLocation": {
+            "value": "[parameters('apimLocation')]"
+          },
+          "apimResourceToken": {
+            "value": "[variables('apimResourceToken')]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "publisherEmail": {
+            "value": "[parameters('publisherEmail')]"
+          },
+          "publisherName": {
+            "value": "[parameters('publisherName')]"
+          },
+          "resourceToken": {
+            "value": "[variables('resourceToken')]"
+          },
+          "telemetryReaderPrincipalId": {
+            "value": "[parameters('telemetryReaderPrincipalId')]"
+          },
+          "enablePrivateNetworking": {
+            "value": "[parameters('enablePrivateNetworking')]"
+          },
+          "apimSubnetResourceId": {
+            "value": "[parameters('apimSubnetResourceId')]"
+          },
+          "privateEndpointSubnetResourceId": {
+            "value": "[parameters('privateEndpointSubnetResourceId')]"
+          },
+          "virtualNetworkResourceId": {
+            "value": "[parameters('virtualNetworkResourceId')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "13907294312940917650"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for all resources."
+              }
+            },
+            "apimLocation": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for API Management."
+              }
+            },
+            "resourceToken": {
+              "type": "string",
+              "metadata": {
+                "description": "Deterministic token generated by the subscription-scoped entry point."
+              }
+            },
+            "apimResourceToken": {
+              "type": "string",
+              "metadata": {
+                "description": "Deterministic token for the globally unique API Management service name."
+              }
+            },
+            "publisherEmail": {
+              "type": "string",
+              "metadata": {
+                "description": "Publisher email required by API Management."
+              }
+            },
+            "publisherName": {
+              "type": "string",
+              "metadata": {
+                "description": "Publisher organization shown by API Management."
+              }
+            },
+            "telemetryReaderPrincipalId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment."
+              }
+            },
+            "enablePrivateNetworking": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Deploy APIM into a VNet and disable public access to Azure OpenAI."
+              }
+            },
+            "apimSubnetResourceId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of the dedicated APIM subnet."
+              }
+            },
+            "privateEndpointSubnetResourceId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of the Azure OpenAI private endpoint subnet."
+              }
+            },
+            "virtualNetworkResourceId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Resource ID of the VNet linked to the Azure OpenAI private DNS zone."
+              }
+            }
+          },
+          "variables": {
+            "$fxv#0": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <rate-limit-by-key calls=\"60\" renewal-period=\"60\" counter-key=\"@(context.Subscription?.Key ?? context.Request.IpAddress)\" />\r\n        <set-header name=\"Authorization\" exists-action=\"delete\" />\r\n        <set-variable name=\"migration-api-mode\" value=\"@{ var mode = context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).ToLowerInvariant(); return string.IsNullOrEmpty(mode) ? &quot;default-v1&quot; : (mode == &quot;v1&quot; || mode == &quot;legacy&quot; ? mode : &quot;invalid&quot;); }\" />\r\n        <trace source=\"openai-v1-migration\" severity=\"information\">\r\n            <message>OpenAI migration request routed by API mode.</message>\r\n            <metadata name=\"api_mode\" value=\"@((string)context.Variables[&quot;migration-api-mode&quot;])\" />\r\n            <metadata name=\"request_id\" value=\"@(context.RequestId.ToString())\" />\r\n        </trace>\r\n        <choose>\r\n            <when condition=\"@(string.IsNullOrEmpty(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;)) || context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;v1&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n                <set-backend-service base-url=\"__V1_BACKEND_URL__\" />\r\n                <rewrite-uri template=\"/openai/v1/chat/completions\" copy-unmatched-params=\"false\" />\r\n                <authentication-managed-identity resource=\"https://ai.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n            </when>\r\n            <when condition=\"@(context.Request.Headers.GetValueOrDefault(&quot;X-API-Mode&quot;, &quot;&quot;).Equals(&quot;legacy&quot;, StringComparison.OrdinalIgnoreCase))\">\r\n                <set-backend-service base-url=\"__LEGACY_BACKEND_URL__\" />\r\n                <rewrite-uri template=\"/openai/deployments/__DEPLOYMENT_NAME__/chat/completions?api-version=2024-10-21\" copy-unmatched-params=\"false\" />\r\n                <authentication-managed-identity resource=\"https://cognitiveservices.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n            </when>\r\n            <otherwise>\r\n                <return-response>\r\n                    <set-status code=\"400\" reason=\"Invalid API mode\" />\r\n                    <set-header name=\"Content-Type\" exists-action=\"override\">\r\n                        <value>application/json</value>\r\n                    </set-header>\r\n                    <set-body>{\"error\":{\"code\":\"invalid_api_mode\",\"message\":\"X-API-Mode must be v1 or legacy when provided.\"}}</set-body>\r\n                </return-response>\r\n            </otherwise>\r\n        </choose>\r\n        <set-header name=\"X-API-Mode\" exists-action=\"delete\" />\r\n    </inbound>\r\n    <backend>\r\n        <retry condition=\"@(context.Response != null &amp;&amp; context.Response.StatusCode &gt;= 500)\" count=\"2\" interval=\"1\" delta=\"1\" max-interval=\"4\" first-fast-retry=\"false\">\r\n            <forward-request buffer-request-body=\"true\" />\r\n        </retry>\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>",
+            "$fxv#1": "<policies>\r\n    <inbound>\r\n        <base />\r\n        <rate-limit-by-key calls=\"60\" renewal-period=\"60\" counter-key=\"@(context.Subscription?.Key ?? context.Request.IpAddress)\" />\r\n        <set-header name=\"Authorization\" exists-action=\"delete\" />\r\n        <rewrite-uri template=\"__BACKEND_PATH__\" copy-unmatched-params=\"false\" />\r\n        <authentication-managed-identity resource=\"https://ai.azure.com\" client-id=\"__APIM_IDENTITY_CLIENT_ID__\" />\r\n    </inbound>\r\n    <backend>\r\n        <retry condition=\"@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode &gt;= 500))\" count=\"2\" interval=\"1\" delta=\"1\" max-interval=\"4\" first-fast-retry=\"false\">\r\n            <forward-request buffer-request-body=\"true\" />\r\n        </retry>\r\n    </backend>\r\n    <outbound>\r\n        <base />\r\n    </outbound>\r\n    <on-error>\r\n        <base />\r\n    </on-error>\r\n</policies>",
+            "azureOpenAIAccountName": "[format('azai{0}', parameters('resourceToken'))]",
+            "azureOpenAIDeploymentName": "[format('azmdl{0}', parameters('resourceToken'))]",
+            "managedIdentityName": "[format('azid{0}', parameters('resourceToken'))]",
+            "apimServiceName": "[format('azapi{0}', parameters('apimResourceToken'))]",
+            "apimApiId": "[format('azoa{0}', parameters('resourceToken'))]",
+            "logAnalyticsName": "[format('azlog{0}', parameters('resourceToken'))]",
+            "applicationInsightsName": "[format('azins{0}', parameters('resourceToken'))]",
+            "privateEndpointName": "[format('azpe{0}', parameters('resourceToken'))]",
+            "apimProductId": "[format('migration-{0}', take(parameters('resourceToken'), 12))]",
+            "apimSubscriptionId": "[format('migration-{0}', take(parameters('resourceToken'), 12))]",
+            "chatOperationId": "[format('azop{0}', parameters('resourceToken'))]",
+            "operations": [
+              {
+                "id": "[variables('chatOperationId')]",
+                "displayName": "Chat completions",
+                "path": "/v1/chat/completions"
+              },
+              {
+                "id": "responses",
+                "displayName": "Responses",
+                "path": "/v1/responses"
+              },
+              {
+                "id": "embeddings",
+                "displayName": "Embeddings",
+                "path": "/v1/embeddings"
+              },
+              {
+                "id": "image-generations",
+                "displayName": "Image generations",
+                "path": "/v1/images/generations"
+              },
+              {
+                "id": "audio-transcriptions",
+                "displayName": "Audio transcriptions",
+                "path": "/v1/audio/transcriptions"
+              },
+              {
+                "id": "files",
+                "displayName": "Files",
+                "path": "/v1/files"
+              },
+              {
+                "id": "batches",
+                "displayName": "Batches",
+                "path": "/v1/batches"
+              },
+              {
+                "id": "fine-tuning-jobs",
+                "displayName": "Fine-tuning jobs",
+                "path": "/v1/fine_tuning/jobs"
+              }
+            ],
+            "cognitiveServicesUserRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')]",
+            "monitoringReaderRoleId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '43d0d8ad-25c7-4714-9337-8ba259a9fe05')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[variables('managedIdentityName')]",
+              "location": "[parameters('location')]"
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2024-10-01",
+              "name": "[variables('azureOpenAIAccountName')]",
+              "location": "[parameters('location')]",
+              "kind": "OpenAI",
+              "sku": {
+                "name": "S0"
+              },
+              "properties": {
+                "customSubDomainName": "[variables('azureOpenAIAccountName')]",
+                "disableLocalAuth": true,
+                "publicNetworkAccess": "[if(parameters('enablePrivateNetworking'), 'Disabled', 'Enabled')]",
+                "networkAcls": {
+                  "defaultAction": "[if(parameters('enablePrivateNetworking'), 'Deny', 'Allow')]"
+                }
+              }
+            },
+            {
+              "condition": "[parameters('enablePrivateNetworking')]",
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('privateEndpointName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetResourceId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "azure-openai",
+                    "properties": {
+                      "privateLinkServiceId": "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]",
+                      "groupIds": [
+                        "account"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]"
+              ]
+            },
+            {
+              "condition": "[parameters('enablePrivateNetworking')]",
+              "type": "Microsoft.Network/privateDnsZones",
+              "apiVersion": "2024-06-01",
+              "name": "privatelink.openai.azure.com",
+              "location": "global"
+            },
+            {
+              "condition": "[parameters('enablePrivateNetworking')]",
+              "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
+              "apiVersion": "2024-06-01",
+              "name": "[format('{0}/{1}', 'privatelink.openai.azure.com', 'openai-vnet-link')]",
+              "location": "global",
+              "properties": {
+                "registrationEnabled": false,
+                "virtualNetwork": {
+                  "id": "[parameters('virtualNetworkResourceId')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')]"
+              ]
+            },
+            {
+              "condition": "[parameters('enablePrivateNetworking')]",
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('privateEndpointName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "openai",
+                    "properties": {
+                      "privateDnsZoneId": "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateDnsZones', 'privatelink.openai.azure.com')]",
+                "[resourceId('Microsoft.Network/privateEndpoints', variables('privateEndpointName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/deployments",
+              "apiVersion": "2024-10-01",
+              "name": "[format('{0}/{1}', variables('azureOpenAIAccountName'), variables('azureOpenAIDeploymentName'))]",
+              "sku": {
+                "name": "GlobalStandard",
+                "capacity": 10
+              },
+              "properties": {
+                "currentCapacity": 10,
+                "model": {
+                  "format": "OpenAI",
+                  "name": "gpt-4.1-mini",
+                  "version": "2025-04-14"
+                },
+                "raiPolicyName": "Microsoft.DefaultV2",
+                "versionUpgradeOption": "OnceCurrentVersionExpired"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[variables('logAnalyticsName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "retentionInDays": 30
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[variables('applicationInsightsName')]",
+              "location": "[parameters('location')]",
+              "kind": "web",
+              "properties": {
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('telemetryReaderPrincipalId')))]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]",
+              "name": "[guid(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), parameters('telemetryReaderPrincipalId'), variables('monitoringReaderRoleId'))]",
+              "properties": {
+                "principalId": "[parameters('telemetryReaderPrincipalId')]",
+                "principalType": "User",
+                "roleDefinitionId": "[variables('monitoringReaderRoleId')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service",
+              "apiVersion": "2024-05-01",
+              "name": "[variables('apimServiceName')]",
+              "location": "[parameters('apimLocation')]",
+              "sku": {
+                "name": "Developer",
+                "capacity": 1
+              },
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')))]": {}
+                }
+              },
+              "properties": "[shallowMerge(createArray(createObject('publisherEmail', parameters('publisherEmail'), 'publisherName', parameters('publisherName'), 'publicNetworkAccess', 'Enabled', 'virtualNetworkType', if(parameters('enablePrivateNetworking'), 'External', 'None')), if(parameters('enablePrivateNetworking'), createObject('virtualNetworkConfiguration', createObject('subnetResourceId', parameters('apimSubnetResourceId'))), createObject()), createObject('customProperties', createObject('Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls11', 'False'))))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/loggers",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('apimServiceName'), 'migration-application-insights')]",
+              "properties": {
+                "loggerType": "applicationInsights",
+                "credentials": {
+                  "instrumentationKey": "[reference(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), '2020-02-02').InstrumentationKey]"
+                },
+                "isBuffered": true,
+                "resourceId": "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
+                "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), variables('cognitiveServicesUserRoleId'))]",
+              "properties": {
+                "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').principalId]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[variables('cognitiveServicesUserRoleId')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('apimServiceName'), variables('apimApiId'))]",
+              "properties": {
+                "apiType": "http",
+                "displayName": "OpenAI API v1",
+                "path": "openai",
+                "protocols": [
+                  "https"
+                ],
+                "serviceUrl": "[reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint]",
+                "subscriptionRequired": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis/diagnostics",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('apimServiceName'), variables('apimApiId'), 'applicationinsights')]",
+              "properties": {
+                "alwaysLog": "allErrors",
+                "backend": {
+                  "request": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  },
+                  "response": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  }
+                },
+                "frontend": {
+                  "request": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  },
+                  "response": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  }
+                },
+                "httpCorrelationProtocol": "W3C",
+                "logClientIp": false,
+                "loggerId": "[resourceId('Microsoft.ApiManagement/service/loggers', variables('apimServiceName'), 'migration-application-insights')]",
+                "metrics": true,
+                "sampling": {
+                  "samplingType": "fixed",
+                  "percentage": 100
+                },
+                "verbosity": "information"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/loggers', variables('apimServiceName'), 'migration-application-insights')]",
+                "[resourceId('Microsoft.ApiManagement/service/apis', variables('apimServiceName'), variables('apimApiId'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "openAIOperations",
+                "count": "[length(variables('operations'))]"
+              },
+              "type": "Microsoft.ApiManagement/service/apis/operations",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('apimServiceName'), variables('apimApiId'), variables('operations')[copyIndex()].id)]",
+              "properties": {
+                "displayName": "[variables('operations')[copyIndex()].displayName]",
+                "method": "POST",
+                "urlTemplate": "[variables('operations')[copyIndex()].path]",
+                "templateParameters": [],
+                "responses": []
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis', variables('apimServiceName'), variables('apimApiId'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "openAIOperationPolicies",
+                "count": "[length(variables('operations'))]"
+              },
+              "type": "Microsoft.ApiManagement/service/apis/operations/policies",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}/{2}/{3}', variables('apimServiceName'), variables('apimApiId'), variables('operations')[copyIndex()].id, 'policy')]",
+              "properties": {
+                "format": "rawxml",
+                "value": "[if(equals(variables('operations')[copyIndex()].id, variables('chatOperationId')), replace(replace(replace(replace(variables('$fxv#0'), '__APIM_IDENTITY_CLIENT_ID__', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId), '__DEPLOYMENT_NAME__', variables('azureOpenAIDeploymentName')), '__V1_BACKEND_URL__', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint), '__LEGACY_BACKEND_URL__', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint), replace(replace(variables('$fxv#1'), '__APIM_IDENTITY_CLIENT_ID__', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), '2023-01-31').clientId), '__BACKEND_PATH__', format('/openai{0}', variables('operations')[copyIndex()].path)))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]",
+                "[extensionResourceId(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')), variables('cognitiveServicesUserRoleId')))]",
+                "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
+                "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('azureOpenAIAccountName'), variables('azureOpenAIDeploymentName'))]",
+                "[resourceId('Microsoft.ApiManagement/service/apis/operations', variables('apimServiceName'), variables('apimApiId'), variables('operations')[copyIndex()].id)]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/products",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('apimServiceName'), variables('apimProductId'))]",
+              "properties": {
+                "displayName": "OpenAI v1 migration",
+                "approvalRequired": false,
+                "state": "published",
+                "subscriptionRequired": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/products/apis",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('apimServiceName'), variables('apimProductId'), variables('apimApiId'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/products', variables('apimServiceName'), variables('apimProductId'))]",
+                "[resourceId('Microsoft.ApiManagement/service/apis', variables('apimServiceName'), variables('apimApiId'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/subscriptions",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('apimServiceName'), variables('apimSubscriptionId'))]",
+              "properties": {
+                "allowTracing": false,
+                "displayName": "OpenAI v1 migration automation",
+                "scope": "[resourceId('Microsoft.ApiManagement/service/products', variables('apimServiceName'), variables('apimProductId'))]",
+                "state": "active"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
+                "[resourceId('Microsoft.ApiManagement/service/products', variables('apimServiceName'), variables('apimProductId'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
+              "name": "send-to-log-analytics",
+              "properties": {
+                "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+                "logs": [
+                  {
+                    "categoryGroup": "allLogs",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
+                "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/actionGroups",
+              "apiVersion": "2023-01-01",
+              "name": "OpenAI migration alerts",
+              "location": "global",
+              "properties": {
+                "enabled": true,
+                "groupShortName": "oaiv1",
+                "emailReceivers": [
+                  {
+                    "name": "APIM publisher",
+                    "emailAddress": "[parameters('publisherEmail')]",
+                    "useCommonAlertSchema": true
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Insights/metricAlerts",
+              "apiVersion": "2018-03-01",
+              "name": "APIM OpenAI failed requests",
+              "location": "global",
+              "properties": {
+                "description": "More than five failed APIM requests in five minutes.",
+                "severity": 2,
+                "enabled": true,
+                "scopes": [
+                  "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]"
+                ],
+                "evaluationFrequency": "PT1M",
+                "windowSize": "PT5M",
+                "criteria": {
+                  "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                  "allOf": [
+                    {
+                      "name": "FailedRequests",
+                      "metricNamespace": "Microsoft.ApiManagement/service",
+                      "metricName": "FailedRequests",
+                      "operator": "GreaterThan",
+                      "threshold": 5,
+                      "timeAggregation": "Total",
+                      "criterionType": "StaticThresholdCriterion"
+                    }
+                  ]
+                },
+                "actions": [
+                  {
+                    "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', 'OpenAI migration alerts')]"
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/actionGroups', 'OpenAI migration alerts')]",
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "azureOpenAIAccountName": {
+              "type": "string",
+              "value": "[variables('azureOpenAIAccountName')]"
+            },
+            "azureOpenAIBaseUrl": {
+              "type": "string",
+              "value": "[format('{0}openai/v1/', reference(resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName')), '2024-10-01').endpoint)]"
+            },
+            "azureOpenAIDeploymentName": {
+              "type": "string",
+              "value": "[variables('azureOpenAIDeploymentName')]"
+            },
+            "apimServiceName": {
+              "type": "string",
+              "value": "[variables('apimServiceName')]"
+            },
+            "apimApiId": {
+              "type": "string",
+              "value": "[variables('apimApiId')]"
+            },
+            "apimOpenAIBaseUrl": {
+              "type": "string",
+              "value": "[format('{0}/openai/v1/', reference(resourceId('Microsoft.ApiManagement/service', variables('apimServiceName')), '2024-05-01').gatewayUrl)]"
+            },
+            "apimSubscriptionId": {
+              "type": "string",
+              "value": "[variables('apimSubscriptionId')]"
+            },
+            "applicationInsightsName": {
+              "type": "string",
+              "value": "[variables('applicationInsightsName')]"
+            },
+            "logAnalyticsWorkspaceName": {
+              "type": "string",
+              "value": "[variables('logAnalyticsName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('resourceGroupName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "RESOURCE_GROUP_ID": {
+      "type": "string",
+      "value": "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('resourceGroupName'))]"
+    },
+    "AZURE_LOCATION": {
+      "type": "string",
+      "value": "[parameters('location')]"
+    },
+    "APIM_LOCATION": {
+      "type": "string",
+      "value": "[parameters('apimLocation')]"
+    },
+    "AZURE_OPENAI_ACCOUNT_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.azureOpenAIAccountName.value]"
+    },
+    "AZURE_OPENAI_BASE_URL": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.azureOpenAIBaseUrl.value]"
+    },
+    "AZURE_OPENAI_DEPLOYMENT": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.azureOpenAIDeploymentName.value]"
+    },
+    "APIM_SERVICE_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.apimServiceName.value]"
+    },
+    "APIM_API_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.apimApiId.value]"
+    },
+    "APIM_OPENAI_BASE_URL": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.apimOpenAIBaseUrl.value]"
+    },
+    "APIM_SUBSCRIPTION_ID": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.apimSubscriptionId.value]"
+    },
+    "APPLICATION_INSIGHTS_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.applicationInsightsName.value]"
+    },
+    "LOG_ANALYTICS_WORKSPACE_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.logAnalyticsWorkspaceName.value]"
+    }
+  }
+}

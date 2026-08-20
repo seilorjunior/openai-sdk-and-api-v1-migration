@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "${AZURE_LOCATION}"
+    },
+    "apimLocation": {
+      "value": "${APIM_LOCATION=centralus}"
+    },
+    "publisherEmail": {
+      "value": "${APIM_PUBLISHER_EMAIL}"
+    },
+    "telemetryReaderPrincipalId": {
+      "value": "${TELEMETRY_READER_PRINCIPAL_ID=}"
+    },
+    "enablePrivateNetworking": {
+      "value": "${ENABLE_PRIVATE_NETWORKING=false}"
+    },
+    "apimSubnetResourceId": {
+      "value": "${APIM_SUBNET_RESOURCE_ID=}"
+    },
+    "privateEndpointSubnetResourceId": {
+      "value": "${PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID=}"
+    },
+    "virtualNetworkResourceId": {
+      "value": "${VIRTUAL_NETWORK_RESOURCE_ID=}"
+    }
+  }
+}

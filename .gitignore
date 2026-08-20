@@ -1,0 +1,23 @@
+# Local Azure Developer CLI environments and credentials
+.azure/
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local configuration and generated validation artifacts
+.env
+.env.*
+email.txt
+apim-snapshot.json
+
+# Local tool logs
+azd-*.log
+
+# Editor and OS metadata
+.vscode/
+.DS_Store
+Thumbs.db

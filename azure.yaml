@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/refs/heads/main/schemas/v1.0/azure.yaml.json
+name: openai-sdk-migration-poc
+infra:
+  provider: bicep
+  path: infra
+  module: main
