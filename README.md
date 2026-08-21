@@ -74,6 +74,7 @@ The dual policy applies only to the existing chat operation. Other APIM operatio
 | `migration_scan.py` | Fleet scanner for legacy SDKs, clients, endpoints, and dated API versions. |
 | `retirement_report.py` | Fail-closed retirement evidence from correlated Application Insights telemetry. |
 | `validate_apim.py` | Live or offline APIM configuration validation with secret redaction. |
+| `RUNBOOK.md` | Alert triage, rollback, key recovery, scaling, private networking, cleanup, and escalation procedures. |
 | `pyproject.toml` | pytest, Ruff, and mypy configuration. |
 | `requirements.txt` | Runtime dependencies (v1 SDK plus the legacy comparison SDK). |
 | `requirements-dev.txt` | Optional pytest/coverage/Ruff/mypy/pip-audit tooling for local and CI quality checks. |
@@ -301,7 +302,9 @@ The script resolves `azd` outputs, holds the key only in memory, validates APIM,
 
 The tracked, manual `Live migration gate` workflow uses the protected `openai-migration-live` environment. Configure the variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_OPENAI_BASE_URL`, `LEGACY_MODELS_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, and `APIM_OPENAI_BASE_URL`. Configure `APIM_SUBSCRIPTION_KEY` as a secret. Azure authentication uses OIDC federation and pinned actions; do not store client secrets.
 
-The dispatch inputs are `target`, `run_load_test`, `minimum_parity_pass_rate`, `legacy_p95_baseline_ms`, `application_insights_name`, `resource_group`, `rollback_rehearsed`, `owner_approved`, and `enforce_retirement_ready`. For APIM retirement evidence, provide the Application Insights component, its resource group, the approved legacy p95 baseline, and the rollback and owner approvals. Enable `enforce_retirement_ready` only when the run is intended to block retirement. The workflow uploads `parity-report.json` and `retirement-report.json` even when a gate fails.
+The dispatch inputs are `target`, `run_load_test`, `minimum_parity_pass_rate`, `legacy_p95_baseline_ms`, `application_insights_name`, `resource_group`, `rollback_rehearsed`, `owner_approved`, and `enforce_retirement_ready`. Ordinary APIM smoke, parity, capability, and load validation does not require the telemetry inputs. Retirement evidence is generated only when both `application_insights_name` and `resource_group` are supplied. When `enforce_retirement_ready` is enabled, omitting either value fails immediately with a prerequisite error. Provide the approved legacy p95 baseline and the rollback and owner approvals for a retirement decision. The workflow uploads available `parity-report.json` and `retirement-report.json` artifacts even when a gate fails.
+
+See [the operational runbook](RUNBOOK.md) for alert triage, rollback, key rotation recovery, scaling, private-network diagnosis, cleanup, and escalation evidence.
 
 ### Remove the obsolete operation
 
@@ -351,6 +354,8 @@ python .\retirement_report.py `
   --subscription-id '<subscription-id>' `
   --resource-group '<resource-group>' `
   --legacy-p95-baseline-ms 5000 `
+  --min-v1-requests 100 `
+  --max-v1-last-request-age-hours 24 `
   --rollback-rehearsed `
   --parity-passed `
   --owner-approved `
@@ -358,7 +363,7 @@ python .\retirement_report.py `
   --output .\retirement-report.json
 ```
 
-The report correlates APIM routing traces with requests and summarizes 7, 14, and 30-day windows. Readiness requires complete request correlation, v1 traffic, zero legacy requests over 14 days, at least 99.5% v1 success, v1 p95 within 10% of the approved legacy baseline, a passing parity run, a rehearsed rollback, and owner approval. Missing telemetry, baseline, or approval fails closed. Without `--require-ready`, the command still writes evidence but does not turn a not-ready decision into a process failure. An exported Application Insights query response can be evaluated offline with `--input`.
+The report correlates APIM routing traces with requests and summarizes 7, 14, and 30-day windows. Readiness requires complete request correlation, at least 100 v1 requests in the 14-day window, a latest v1 request no older than 24 hours, zero legacy requests over 14 days, at least 99.5% v1 success, v1 p95 within 10% of the approved legacy baseline, a passing parity run, a rehearsed rollback, and owner approval. Override the volume and recency defaults with `--min-v1-requests` and `--max-v1-last-request-age-hours` only when the change record documents the rationale. Missing, stale, or future-dated telemetry, a missing baseline, or a missing approval fails closed. Without `--require-ready`, the command still writes evidence but does not turn a not-ready decision into a process failure. An exported Application Insights query response can be evaluated offline with `--input`.
 
 After cutover, keep the legacy branch disabled but recoverable for seven days. Remove it through Bicep after that period.
 
@@ -372,6 +377,8 @@ azd env set APIM_SUBNET_RESOURCE_ID '<subnet-resource-id>'
 azd env set PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID '<subnet-resource-id>'
 azd env set VIRTUAL_NETWORK_RESOURCE_ID '<vnet-resource-id>'
 ```
+
+When private networking is enabled, Bicep validates all three resource IDs with stable `fail()` expressions at both the subscription entry point and reusable module. A blank value stops deployment with the name of the missing parameter before resource provisioning begins. Empty values remain valid when private networking is disabled.
 
 The Developer SKU is suitable for this POC but has no production SLA. Before customer traffic, choose a SKU with suitable SLA and capacity, validate DNS and TCP 443 from the gateway, and define approved error and latency thresholds.
 

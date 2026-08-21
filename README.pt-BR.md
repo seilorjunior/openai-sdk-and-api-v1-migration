@@ -74,6 +74,7 @@ A política dual cobre somente a operação existente de chat. As demais operaç
 | `migration_scan.py` | Scanner de repositórios para SDKs, clientes, endpoints e versões de API legados. |
 | `retirement_report.py` | Evidência fail-closed para retirada do legado com telemetria correlacionada do Application Insights. |
 | `validate_apim.py` | Validação live ou offline da configuração APIM com redação de segredos. |
+| `RUNBOOK.md` | Triagem de alertas, rollback, recuperação de chaves, escala, rede privada, limpeza e escalonamento. |
 | `pyproject.toml` | Configuração de pytest, Ruff e mypy. |
 | `requirements.txt` | Dependências de runtime (SDK v1 e SDK de comparação legada). |
 | `requirements-dev.txt` | Ferramentas opcionais de pytest/cobertura/Ruff/mypy/pip-audit para checks locais e no CI. |
@@ -301,7 +302,9 @@ O script resolve os outputs do ambiente `azd`, recupera a chave somente em memó
 
 O workflow manual e versionado `Live migration gate` usa o ambiente protegido `openai-migration-live`. Configure as variáveis `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_OPENAI_BASE_URL`, `LEGACY_MODELS_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT` e `APIM_OPENAI_BASE_URL`. Configure `APIM_SUBSCRIPTION_KEY` como secret. A autenticação Azure usa federação OIDC e actions fixadas por SHA; não armazene client secrets.
 
-Os inputs do disparo são `target`, `run_load_test`, `minimum_parity_pass_rate`, `legacy_p95_baseline_ms`, `application_insights_name`, `resource_group`, `rollback_rehearsed`, `owner_approved` e `enforce_retirement_ready`. Para gerar evidência de retirada no APIM, informe o componente Application Insights, seu resource group, o baseline p95 legado aprovado e as confirmações de rollback e do responsável. Ative `enforce_retirement_ready` somente quando a execução deve bloquear a retirada. O workflow publica `parity-report.json` e `retirement-report.json` mesmo quando um gate falha.
+Os inputs do disparo são `target`, `run_load_test`, `minimum_parity_pass_rate`, `legacy_p95_baseline_ms`, `application_insights_name`, `resource_group`, `rollback_rehearsed`, `owner_approved` e `enforce_retirement_ready`. A validação comum de smoke, paridade, capacidades e carga do APIM não exige os inputs de telemetria. A evidência de retirada só é gerada quando `application_insights_name` e `resource_group` são informados. Quando `enforce_retirement_ready` está ativo, omitir qualquer um deles causa falha imediata com uma mensagem de pré-requisito. Para uma decisão de retirada, informe também o baseline p95 legado aprovado e as confirmações de rollback e do responsável. O workflow publica os artefatos disponíveis `parity-report.json` e `retirement-report.json` mesmo quando um gate falha.
+
+Consulte o [runbook operacional](RUNBOOK.md) para triagem de alertas, rollback, recuperação da rotação de chaves, escala, diagnóstico de rede privada, limpeza e evidências de escalonamento.
 
 ### Limpeza da operação obsoleta
 
@@ -351,6 +354,8 @@ python .\retirement_report.py `
   --subscription-id '<subscription-id>' `
   --resource-group '<resource-group>' `
   --legacy-p95-baseline-ms 5000 `
+  --min-v1-requests 100 `
+  --max-v1-last-request-age-hours 24 `
   --rollback-rehearsed `
   --parity-passed `
   --owner-approved `
@@ -358,7 +363,7 @@ python .\retirement_report.py `
   --output .\retirement-report.json
 ```
 
-O relatório correlaciona traces de roteamento do APIM com requests e resume janelas de 7, 14 e 30 dias. A prontidão exige correlação completa, tráfego v1, zero requisições legadas em 14 dias, sucesso v1 de pelo menos 99,5%, p95 v1 até 10% acima do baseline legado aprovado, paridade aprovada, rollback ensaiado e aprovação do responsável. Telemetria, baseline ou aprovação ausentes causam falha fechada. Sem `--require-ready`, o comando ainda grava a evidência, mas uma decisão não pronta não causa falha do processo. Uma resposta exportada da consulta do Application Insights pode ser avaliada offline com `--input`.
+O relatório correlaciona traces de roteamento do APIM com requests e resume janelas de 7, 14 e 30 dias. A prontidão exige correlação completa, pelo menos 100 requisições v1 na janela de 14 dias, uma requisição v1 mais recente com no máximo 24 horas, zero requisições legadas em 14 dias, sucesso v1 de pelo menos 99,5%, p95 v1 até 10% acima do baseline legado aprovado, paridade aprovada, rollback ensaiado e aprovação do responsável. Altere os padrões de volume e recência com `--min-v1-requests` e `--max-v1-last-request-age-hours` somente quando a justificativa estiver registrada. Telemetria ausente, antiga ou com data futura, baseline ausente ou aprovação ausente causam falha fechada. Sem `--require-ready`, o comando ainda grava a evidência, mas uma decisão não pronta não causa falha do processo. Uma resposta exportada da consulta do Application Insights pode ser avaliada offline com `--input`.
 
 Após o cutover, mantenha o branch legado desabilitado, mas recuperável, por sete dias. Ao fim desse período, remova-o por Bicep.
 
@@ -372,6 +377,8 @@ azd env set APIM_SUBNET_RESOURCE_ID '<subnet-resource-id>'
 azd env set PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID '<subnet-resource-id>'
 azd env set VIRTUAL_NETWORK_RESOURCE_ID '<vnet-resource-id>'
 ```
+
+Quando a rede privada está habilitada, o Bicep valida os três IDs de recurso com expressões estáveis `fail()` tanto no ponto de entrada da assinatura quanto no módulo reutilizável. Um valor vazio interrompe o deployment com o nome do parâmetro ausente antes do provisionamento de recursos. Valores vazios continuam válidos quando a rede privada está desabilitada.
 
 O SKU Developer é adequado à POC, mas não possui SLA de produção. Antes de tráfego de cliente, escolha um SKU com SLA/capacidade compatíveis, valide DNS/443 a partir do gateway e defina limites aprovados de erro e latência.
 
