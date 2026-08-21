@@ -94,7 +94,7 @@ A política dual cobre somente a operação existente de chat. As demais operaç
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest --cov --cov-report=term-missing
+python -m pytest --cov --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=65
 python -m ruff check .
 python -m mypy
 python -m pip_audit --no-deps -r requirements.txt
@@ -103,7 +103,9 @@ az bicep lint --file infra/main.bicep
 az bicep lint --file infra/resources.bicep
 ```
 
-Os testes, lint, type checks e validação do Bicep são determinísticos e não exigem credenciais Azure live. O workflow `Migration validation` do GitHub Actions executa pytest com cobertura mínima de 60% em Python 3.10-3.13, além de Ruff e mypy bloqueantes e auditoria de vulnerabilidades em um ambiente Python 3.13 limpo. Ele também compila e valida o Bicep, faz parse dos JSONs ARM gerado e de parâmetros, analisa todos os scripts PowerShell operacionais com PSScriptAnalyzer e publica `migration-scan.sarif`. O Dependabot verifica semanalmente dependências pip e GitHub Actions, enquanto as actions dos workflows são fixadas por SHA imutável. `requirements-dev.txt` é opcional e atende apenas aos checks locais/CI; não é exigido pelos comandos em runtime. O `.pre-commit-config.yaml` opcional executa o mesmo check não mutável do Ruff antes dos commits.
+A suíte determinística cobre construção e normalização de clientes, cancelamento assíncrono e cleanup, adaptadores de capacidades, clientes thread-local do teste de carga, comparação de respostas, findings de migração legada, evidência de retirada, validação do APIM, redação de segredos, retries e comportamento de saída dos CLIs. Esses testes usam mocks nos limites dos SDKs, Azure CLI e processos e não exigem credenciais Azure live. O comando de cobertura mede branches, exibe linhas não cobertas, grava `coverage.xml` e aplica o mesmo limite mínimo de 65% do CI.
+
+O workflow `Migration validation` do GitHub Actions executa a suíte em Python 3.10-3.13, com Ruff e mypy bloqueantes, e audita as dependências de runtime em um ambiente Python 3.13 limpo. Ele também compila e valida o Bicep, faz parse dos JSONs ARM gerado e de parâmetros, analisa todos os scripts PowerShell operacionais com PSScriptAnalyzer e publica `migration-scan.sarif`. O Dependabot verifica semanalmente dependências pip e GitHub Actions, enquanto as actions dos workflows são fixadas por SHA imutável. `requirements-dev.txt` é opcional e atende somente aos checks locais e de CI; os comandos não precisam dele em runtime. O `.pre-commit-config.yaml` opcional executa o mesmo check não mutável do Ruff antes dos commits.
 
 ## Escanear uma frota de aplicações
 

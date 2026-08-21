@@ -94,7 +94,7 @@ The dual policy applies only to the existing chat operation. Other APIM operatio
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest --cov --cov-report=term-missing
+python -m pytest --cov --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=65
 python -m ruff check .
 python -m mypy
 python -m pip_audit --no-deps -r requirements.txt
@@ -103,7 +103,9 @@ az bicep lint --file infra/main.bicep
 az bicep lint --file infra/resources.bicep
 ```
 
-The tests, lint, type checks, and Bicep validation are deterministic and require no live Azure credentials. The `Migration validation` GitHub Actions workflow runs pytest with a 60% coverage floor across Python 3.10-3.13, blocking Ruff and mypy checks, and a dependency vulnerability audit in a clean Python 3.13 environment. It also builds and lints Bicep, parses generated and parameter ARM JSON, analyzes every operational PowerShell script with PSScriptAnalyzer, and uploads `migration-scan.sarif`. Dependabot checks pip and GitHub Actions dependencies weekly, while workflow actions are pinned to immutable commit SHAs. `requirements-dev.txt` is optional and only supports local/CI quality checks; it is not required by the command-line tools at runtime. The optional `.pre-commit-config.yaml` runs the same non-mutating Ruff check before commits.
+The deterministic suite covers client construction and normalization, async cancellation and cleanup, capability adapters, thread-local load clients, response comparison, legacy migration findings, retirement evidence, APIM validation, secret redaction, retries, and CLI exit behavior. These tests use mocks at SDK, Azure CLI, and process boundaries and require no live Azure credentials. The coverage command measures branches, prints missing lines, writes `coverage.xml`, and enforces the same 65% floor as CI.
+
+The `Migration validation` GitHub Actions workflow runs the suite across Python 3.10-3.13 with blocking Ruff and mypy checks and audits runtime dependencies in a clean Python 3.13 environment. It also builds and lints Bicep, parses generated and parameter ARM JSON, analyzes every operational PowerShell script with PSScriptAnalyzer, and uploads `migration-scan.sarif`. Dependabot checks pip and GitHub Actions dependencies weekly, while workflow actions are pinned to immutable commit SHAs. `requirements-dev.txt` is optional and only supports local and CI quality checks; the command-line tools do not require it at runtime. The optional `.pre-commit-config.yaml` runs the same non-mutating Ruff check before commits.
 
 ## Scan an application fleet
 

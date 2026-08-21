@@ -14,6 +14,20 @@ This runbook covers operational response for the temporary APIM migration facade
 
 4. Stop promotion or retirement when smoke, parity, telemetry, or readiness checks fail.
 
+## Deterministic quality gate
+
+Run the local quality gate before changing an APIM revision, migration policy, client behavior, or retirement criteria:
+
+```powershell
+python -m pytest --cov --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=65
+python -m ruff check .
+python -m mypy
+```
+
+The pytest suite is offline and mocks SDK, Azure CLI, and process boundaries. It validates smoke and cancellation lifecycle behavior, v1 capability adapters, response parity, thread-local load client isolation, migration findings, retirement evidence, retry handling, APIM validation, and secret redaction. A failure below 65% branch coverage blocks the change. `coverage.xml` is generated for tooling and is ignored by Git.
+
+Live smoke, parity, load, telemetry, and retirement checks remain separate because they require deployed Azure resources and protected credentials. Run `scripts/validate-live-migration.ps1` after the deterministic gate passes.
+
 ## Failed-request alert triage
 
 The default alert fires when APIM records more than five failed requests in five minutes. Query Application Insights without request or response bodies:
@@ -30,7 +44,7 @@ requests
 Classify the result before remediation:
 
 | Signal | Likely owner | Next action |
-|---|---|---|
+| --- | --- | --- |
 | `401` or `403` at APIM | Subscription or policy authentication | Validate the client key, APIM product/subscription state, managed identity, and `Cognitive Services User` assignment. |
 | Backend `401` or `403` | APIM managed identity/RBAC | Verify the APIM user-assigned identity and backend token audience `https://ai.azure.com`. |
 | `429` | APIM rate limit or model quota | Compare APIM policy limits with Azure OpenAI quota; reduce concurrency or increase approved capacity. |
