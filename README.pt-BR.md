@@ -142,7 +142,7 @@ O deployment também aceita as configurações opcionais abaixo no `azd`; os val
 | `AZURE_OPENAI_MODEL_NAME` | `gpt-4.1-mini` | Modelo implantado no Azure OpenAI. |
 | `AZURE_OPENAI_MODEL_VERSION` | `2025-04-14` | Versão do modelo. |
 | `AZURE_OPENAI_DEPLOYMENT_SKU` | `GlobalStandard` | SKU do deployment. |
-| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `10` | Capacidade do deployment. |
+| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `4990` | Alvo máximo pontual de escala do deployment `gpt-4.1-mini` Global Standard existente no Brazil South; consulte a capacidade novamente antes do provisionamento. |
 | `APIM_SKU_NAME` / `APIM_CAPACITY` | `Developer` / `1` | Camada e unidades do APIM. |
 | `APIM_RATE_LIMIT_CALLS_PER_MINUTE` | `60` | Requisições permitidas por minuto por assinatura ou IP do cliente. |
 | `APIM_BACKEND_RETRY_COUNT` / `APIM_BACKEND_RETRY_INTERVAL_SECONDS` | `2` / `1` | Tentativas e intervalo inicial do APIM somente para respostas `5xx` do backend. |
@@ -153,6 +153,14 @@ O deployment também aceita as configurações opcionais abaixo no `azd`; os val
 | `APIM_SUBNET_RESOURCE_ID` | vazio | Subnet dedicada do APIM; obrigatória com rede privada. |
 | `PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID` | vazio | Subnet do private endpoint; obrigatória com rede privada. |
 | `VIRTUAL_NETWORK_RESOURCE_ID` | vazio | VNet vinculada à zona DNS privada do Azure OpenAI. |
+
+O padrão de capacidade `4990` é o alvo de escala do deployment existente nesta assinatura, calculado em 21 de agosto de 2026 como as `10` unidades atuais mais `4980` unidades adicionais informadas pela API Model Capacities do Azure. Cada unidade deste deployment `gpt-4.1-mini` Global Standard fornece 1.000 TPM e 1 RPM. Portanto, o alvo representa 4,99 milhões de TPM e 4.990 RPM.
+
+A capacidade disponível varia conforme a cota da assinatura, a capacidade regional do serviço e os outros deployments. Antes do provisionamento, use o procedimento da API Model Capacities em `RUNBOOK.md`. Ao escalar este mesmo deployment, o alvo máximo é a capacidade atual mais `availableCapacity`. Para um novo deployment, o alvo não pode exceder `availableCapacity`. Defina um valor menor quando a API informar menos capacidade:
+
+```powershell
+azd env set AZURE_OPENAI_DEPLOYMENT_CAPACITY '<capacidade-disponivel>'
+```
 
 O provisionamento do APIM pode levar vários minutos. Ao concluir, o `azd` grava endpoints e nomes não secretos no ambiente. Carregue-os na sessão atual e alinhe o Azure CLI à mesma assinatura:
 

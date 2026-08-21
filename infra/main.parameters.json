@@ -24,7 +24,7 @@
       "value": "${AZURE_OPENAI_DEPLOYMENT_SKU=GlobalStandard}"
     },
     "modelDeploymentCapacity": {
-      "value": "${AZURE_OPENAI_DEPLOYMENT_CAPACITY=10}"
+      "value": "${AZURE_OPENAI_DEPLOYMENT_CAPACITY=4990}"
     },
     "apimSkuName": {
       "value": "${APIM_SKU_NAME=Developer}"

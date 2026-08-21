@@ -26,8 +26,8 @@ param modelVersion string = '2025-04-14'
 param modelDeploymentSku string = 'GlobalStandard'
 
 @minValue(1)
-@description('Azure OpenAI deployment capacity.')
-param modelDeploymentCapacity int = 10
+@description('Azure OpenAI deployment capacity. The default uses the maximum currently available gpt-4.1-mini GlobalStandard quota for this subscription in Brazil South.')
+param modelDeploymentCapacity int = 4990
 
 @description('API Management SKU.')
 param apimSkuName string = 'Developer'

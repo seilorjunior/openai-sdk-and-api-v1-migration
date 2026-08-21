@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "4921534655786634980"
+      "templateHash": "1538175850319751169"
     }
   },
   "parameters": {
@@ -65,10 +65,10 @@
     },
     "modelDeploymentCapacity": {
       "type": "int",
-      "defaultValue": 10,
+      "defaultValue": 4990,
       "minValue": 1,
       "metadata": {
-        "description": "Azure OpenAI deployment capacity."
+        "description": "Azure OpenAI deployment capacity. The default uses the maximum currently available gpt-4.1-mini GlobalStandard quota for this subscription in Brazil South."
       }
     },
     "apimSkuName": {

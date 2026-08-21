@@ -88,9 +88,29 @@ The script regenerates the selected slot, updates the protected GitHub environme
 
 1. Identify whether throttling comes from the APIM `rate-limit-by-key` policy or Azure OpenAI quota.
 2. Review `APIM_RATE_LIMIT_CALLS_PER_MINUTE`, `APIM_SKU_NAME`, `APIM_CAPACITY`, `AZURE_OPENAI_DEPLOYMENT_SKU`, and `AZURE_OPENAI_DEPLOYMENT_CAPACITY`.
-3. Confirm regional SKU availability and model quota before changing capacity.
-4. Update the azd environment value, run `azd provision`, and repeat smoke, parity, and bounded load checks.
-5. Increase limits incrementally. Keep client retries responsible for `429`; APIM retries only transient `5xx` responses.
+3. Query the Model Capacities API before changing capacity. It accounts for subscription quota and current regional service capacity:
+
+```powershell
+$subscriptionId = (azd env get-value AZURE_SUBSCRIPTION_ID).Trim().Trim('"')
+$token = az account get-access-token `
+  --subscription $subscriptionId `
+  --resource https://management.azure.com/ `
+  --query accessToken -o tsv
+$uri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.CognitiveServices/modelCapacities?api-version=2024-10-01&modelFormat=OpenAI&modelName=gpt-4.1-mini&modelVersion=2025-04-14"
+$capacity = Invoke-RestMethod -Method Get -Uri $uri `
+  -Headers @{ Authorization = "Bearer $token" }
+$capacity.value |
+  Where-Object {
+    $_.location -eq 'brazilsouth' -and
+    $_.properties.skuName -eq 'GlobalStandard'
+  } |
+  Select-Object location, @{ Name = 'availableCapacity'; Expression = { $_.properties.availableCapacity } }
+```
+
+1. Interpret `availableCapacity` as additional capacity that can be allocated now. For the existing deployment, add its current capacity to this value to calculate the maximum scale target. For a new deployment, use no more than `availableCapacity`.
+2. The checked-in `4990` target was calculated on August 21, 2026 from `10` existing units plus `4980` available units. It represents 4.99 million TPM and 4,990 RPM for `gpt-4.1-mini` Global Standard. Treat it as a point-in-time subscription-specific value.
+3. Update the azd environment value, run `azd provision`, and repeat smoke, parity, and bounded load checks.
+4. Increase APIM limits incrementally. Keep client retries responsible for `429`; APIM retries only transient `5xx` responses.
 
 The Developer APIM SKU has no production SLA. Select a production SKU and capacity before serving customer traffic.
 
