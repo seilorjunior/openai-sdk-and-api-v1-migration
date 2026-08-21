@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from argparse import Namespace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -43,11 +44,60 @@ class LoadAndCompareTests(unittest.TestCase):
             rollback_rehearsed=True,
             parity_passed=True,
             owner_approved=True,
+            evaluated_at=datetime(2026, 7, 1, 12, tzinfo=timezone.utc),
         )
 
         self.assertTrue(report["ready"])
         self.assertEqual(report["windows"]["14"]["combined_v1"]["success_rate"], 0.999)
         self.assertEqual(report["thresholds"]["observed_v1_p95_ms"], 105.0)
+
+    def test_retirement_report_requires_minimum_v1_request_volume(self) -> None:
+        rows = [{
+            "window_days": 14,
+            "api_mode": "v1",
+            "request_count": 99,
+            "observed_request_count": 99,
+            "failed_count": 0,
+            "throttled_count": 0,
+            "p95_ms": 50.0,
+            "last_request": "2026-07-01T12:00:00Z",
+        }]
+
+        report = retirement_report.evaluate(
+            rows,
+            legacy_p95_baseline_ms=50.0,
+            rollback_rehearsed=True,
+            parity_passed=True,
+            owner_approved=True,
+            evaluated_at=datetime(2026, 7, 1, 12, tzinfo=timezone.utc),
+        )
+
+        self.assertFalse(report["ready"])
+        self.assertFalse(report["checks"]["minimum_v1_request_volume"])
+
+    def test_retirement_report_rejects_stale_v1_traffic(self) -> None:
+        rows = [{
+            "window_days": 14,
+            "api_mode": "default-v1",
+            "request_count": 100,
+            "observed_request_count": 100,
+            "failed_count": 0,
+            "throttled_count": 0,
+            "p95_ms": 50.0,
+            "last_request": "2026-06-29T12:00:00Z",
+        }]
+
+        report = retirement_report.evaluate(
+            rows,
+            legacy_p95_baseline_ms=50.0,
+            rollback_rehearsed=True,
+            parity_passed=True,
+            owner_approved=True,
+            evaluated_at=datetime(2026, 7, 1, 12, tzinfo=timezone.utc),
+        )
+
+        self.assertFalse(report["ready"])
+        self.assertFalse(report["checks"]["recent_v1_traffic"])
 
     def test_retirement_report_requires_complete_correlated_request_telemetry(self) -> None:
         rows = [

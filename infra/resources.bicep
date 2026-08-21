@@ -78,6 +78,9 @@ var privateEndpointName = 'azpe${resourceToken}'
 var apimProductId = 'migration-${take(resourceToken, 12)}'
 var apimSubscriptionId = 'migration-${take(resourceToken, 12)}'
 var chatOperationId = 'azop${resourceToken}'
+var validatedApimSubnetResourceId = !enablePrivateNetworking || !empty(apimSubnetResourceId) ? apimSubnetResourceId : fail('apimSubnetResourceId is required when enablePrivateNetworking is true.')
+var validatedPrivateEndpointSubnetResourceId = !enablePrivateNetworking || !empty(privateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : fail('privateEndpointSubnetResourceId is required when enablePrivateNetworking is true.')
+var validatedVirtualNetworkResourceId = !enablePrivateNetworking || !empty(virtualNetworkResourceId) ? virtualNetworkResourceId : fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.')
 var operations = [
   {
     id: chatOperationId
@@ -160,7 +163,7 @@ resource openAIPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-05-01' =
   location: location
   properties: {
     subnet: {
-      id: privateEndpointSubnetResourceId
+      id: validatedPrivateEndpointSubnetResourceId
     }
     privateLinkServiceConnections: [
       {
@@ -188,7 +191,7 @@ resource openAIVirtualNetworkLink 'Microsoft.Network/privateDnsZones/virtualNetw
   properties: {
     registrationEnabled: false
     virtualNetwork: {
-      id: virtualNetworkResourceId
+      id: validatedVirtualNetworkResourceId
     }
   }
 }
@@ -276,7 +279,7 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
     virtualNetworkType: enablePrivateNetworking ? 'External' : 'None'
     ...(enablePrivateNetworking ? {
       virtualNetworkConfiguration: {
-        subnetResourceId: apimSubnetResourceId
+        subnetResourceId: validatedApimSubnetResourceId
       }
     } : {})
     customProperties: {
