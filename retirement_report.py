@@ -8,7 +8,7 @@ import json
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +86,18 @@ def mode_metrics(rows: list[dict[str, Any]], window_days: int, mode: str) -> dic
     }
 
 
+def parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def evaluate(
     rows: list[dict[str, Any]],
     legacy_p95_baseline_ms: float | None,
@@ -94,7 +106,11 @@ def evaluate(
     rollback_rehearsed: bool = False,
     parity_passed: bool = False,
     owner_approved: bool = False,
+    min_v1_requests: int = 100,
+    max_v1_last_request_age_hours: int = 24,
+    evaluated_at: datetime | None = None,
 ) -> dict[str, Any]:
+    now = (evaluated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     windows: dict[str, Any] = {}
     for days in WINDOWS:
         legacy = mode_metrics(rows, days, "legacy")
@@ -109,6 +125,12 @@ def evaluate(
         observed = combined_v1["observed_requests"]
         combined_v1["success_rate"] = round((observed - combined_v1["failed"]) / observed, 6) if observed else None
         combined_v1["throttle_rate"] = round(combined_v1["throttled"] / observed, 6) if observed else None
+        last_requests = [
+            timestamp
+            for timestamp in (parse_timestamp(v1["last_request"]), parse_timestamp(default_v1["last_request"]))
+            if timestamp is not None
+        ]
+        combined_v1["last_request"] = max(last_requests).isoformat() if last_requests else None
         windows[str(days)] = {
             "legacy": legacy,
             "v1": v1,
@@ -122,8 +144,13 @@ def evaluate(
         value for value in (evidence["v1"]["p95_ms"], evidence["default_v1"]["p95_ms"]) if value is not None
     ]
     observed_p95 = max(v1_p95_values) if v1_p95_values else None
+    last_v1_request = parse_timestamp(combined["last_request"])
+    recent_v1_traffic = (
+        last_v1_request is not None
+        and timedelta(0) <= now - last_v1_request <= timedelta(hours=max_v1_last_request_age_hours)
+    )
     telemetry_complete = (
-        combined["requests"] > 0
+        combined["requests"] >= min_v1_requests
         and combined["observed_requests"] == combined["requests"]
         and evidence["legacy"]["observed_requests"] == evidence["legacy"]["requests"]
     )
@@ -134,6 +161,8 @@ def evaluate(
     )
     checks = {
         "telemetry_complete": telemetry_complete,
+        "minimum_v1_request_volume": combined["requests"] >= min_v1_requests,
+        "recent_v1_traffic": recent_v1_traffic,
         "no_legacy_requests_for_14_days": evidence["legacy"]["requests"] == 0,
         "v1_success_rate": combined["success_rate"] is not None and combined["success_rate"] >= min_success_rate,
         "v1_p95_within_approved_baseline": latency_passed,
@@ -142,11 +171,13 @@ def evaluate(
         "owner_approved": owner_approved,
     }
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": now.isoformat(),
         "ready": all(checks.values()),
         "checks": checks,
         "thresholds": {
             "min_v1_success_rate": min_success_rate,
+            "min_v1_requests": min_v1_requests,
+            "max_v1_last_request_age_hours": max_v1_last_request_age_hours,
             "legacy_p95_baseline_ms": legacy_p95_baseline_ms,
             "max_latency_increase": max_latency_increase,
             "max_v1_p95_ms": (
@@ -192,6 +223,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resource-group")
     parser.add_argument("--legacy-p95-baseline-ms", type=float)
     parser.add_argument("--min-success-rate", type=float, default=0.995)
+    parser.add_argument("--min-v1-requests", type=int, default=100)
+    parser.add_argument("--max-v1-last-request-age-hours", type=int, default=24)
     parser.add_argument("--max-latency-increase", type=float, default=0.10)
     parser.add_argument("--rollback-rehearsed", action="store_true")
     parser.add_argument("--parity-passed", action="store_true")
@@ -212,12 +245,14 @@ def main() -> int:
             rows = query_azure(args.subscription_id, args.resource_group, args.application_insights_name)
         report = evaluate(
             rows,
-            args.legacy_p95_baseline_ms,
-            args.min_success_rate,
-            args.max_latency_increase,
-            args.rollback_rehearsed,
-            args.parity_passed,
-            args.owner_approved,
+            legacy_p95_baseline_ms=args.legacy_p95_baseline_ms,
+            min_success_rate=args.min_success_rate,
+            max_latency_increase=args.max_latency_increase,
+            rollback_rehearsed=args.rollback_rehearsed,
+            parity_passed=args.parity_passed,
+            owner_approved=args.owner_approved,
+            min_v1_requests=args.min_v1_requests,
+            max_v1_last_request_age_hours=args.max_v1_last_request_age_hours,
         )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, json.JSONDecodeError) as error:
         print(json.dumps({"ready": False, "error_type": type(error).__name__}), file=sys.stderr)
