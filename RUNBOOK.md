@@ -14,6 +14,20 @@ This runbook covers operational response for the temporary APIM migration facade
 
 4. Stop promotion or retirement when smoke, parity, telemetry, or readiness checks fail.
 
+## Deterministic quality gate
+
+Run the local quality gate before changing an APIM revision, migration policy, client behavior, or retirement criteria:
+
+```powershell
+python -m pytest --cov --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=65
+python -m ruff check .
+python -m mypy
+```
+
+The pytest suite is offline and mocks SDK, Azure CLI, and process boundaries. It validates smoke and cancellation lifecycle behavior, v1 capability adapters, response parity, thread-local load client isolation, migration findings, retirement evidence, retry handling, APIM validation, and secret redaction. A failure below 65% branch coverage blocks the change. `coverage.xml` is generated for tooling and is ignored by Git.
+
+Live smoke, parity, load, telemetry, and retirement checks remain separate because they require deployed Azure resources and protected credentials. Run `scripts/validate-live-migration.ps1` after the deterministic gate passes.
+
 ## Failed-request alert triage
 
 The default alert fires when APIM records more than five failed requests in five minutes. Query Application Insights without request or response bodies:
@@ -30,7 +44,7 @@ requests
 Classify the result before remediation:
 
 | Signal | Likely owner | Next action |
-|---|---|---|
+| --- | --- | --- |
 | `401` or `403` at APIM | Subscription or policy authentication | Validate the client key, APIM product/subscription state, managed identity, and `Cognitive Services User` assignment. |
 | Backend `401` or `403` | APIM managed identity/RBAC | Verify the APIM user-assigned identity and backend token audience `https://ai.azure.com`. |
 | `429` | APIM rate limit or model quota | Compare APIM policy limits with Azure OpenAI quota; reduce concurrency or increase approved capacity. |
@@ -74,11 +88,52 @@ The script regenerates the selected slot, updates the protected GitHub environme
 
 1. Identify whether throttling comes from the APIM `rate-limit-by-key` policy or Azure OpenAI quota.
 2. Review `APIM_RATE_LIMIT_CALLS_PER_MINUTE`, `APIM_SKU_NAME`, `APIM_CAPACITY`, `AZURE_OPENAI_DEPLOYMENT_SKU`, and `AZURE_OPENAI_DEPLOYMENT_CAPACITY`.
-3. Confirm regional SKU availability and model quota before changing capacity.
-4. Update the azd environment value, run `azd provision`, and repeat smoke, parity, and bounded load checks.
-5. Increase limits incrementally. Keep client retries responsible for `429`; APIM retries only transient `5xx` responses.
+3. Query the Model Capacities API before changing capacity. It accounts for subscription quota and current regional service capacity:
+
+```powershell
+$subscriptionId = (azd env get-value AZURE_SUBSCRIPTION_ID).Trim().Trim('"')
+$token = az account get-access-token `
+  --subscription $subscriptionId `
+  --resource https://management.azure.com/ `
+  --query accessToken -o tsv
+$uri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.CognitiveServices/modelCapacities?api-version=2024-10-01&modelFormat=OpenAI&modelName=gpt-4.1-mini&modelVersion=2025-04-14"
+$capacity = Invoke-RestMethod -Method Get -Uri $uri `
+  -Headers @{ Authorization = "Bearer $token" }
+$capacity.value |
+  Where-Object {
+    $_.location -eq 'brazilsouth' -and
+    $_.properties.skuName -eq 'GlobalStandard'
+  } |
+  Select-Object location, @{ Name = 'availableCapacity'; Expression = { $_.properties.availableCapacity } }
+```
+
+1. Interpret `availableCapacity` as additional capacity that can be allocated now. For the existing deployment, add its current capacity to this value to calculate the maximum scale target. For a new deployment, use no more than `availableCapacity`.
+2. The checked-in `4990` target was calculated on August 21, 2026 from `10` existing units plus `4980` available units. It represents 4.99 million TPM and 4,990 RPM for `gpt-4.1-mini` Global Standard. Treat it as a point-in-time subscription-specific value.
+3. Update the azd environment value, run `azd provision`, and repeat smoke, parity, and bounded load checks.
+4. Increase APIM limits incrementally. Keep client retries responsible for `429`; APIM retries only transient `5xx` responses.
 
 The Developer APIM SKU has no production SLA. Select a production SKU and capacity before serving customer traffic.
+
+## Defender for AI Services verification
+
+The subscription-scoped Bicep entry point changes Microsoft Defender for AI Services only when `ENABLE_DEFENDER_FOR_AI=true`. This explicit opt-in sets the subscription-wide `AI` plan to the billable `Standard` tier. Before enabling it or running `azd provision`, verify that the selected subscription is the intended billing and security boundary:
+
+```powershell
+$subscriptionId = az account show --query id -o tsv
+azd env get-value AZURE_SUBSCRIPTION_ID
+azd env get-value ENABLE_DEFENDER_FOR_AI
+```
+
+After provisioning, verify the effective plan and coverage:
+
+```powershell
+$uri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Security/pricings/AI?api-version=2024-01-01"
+az rest --method get --uri $uri `
+  --query "{plan:name,tier:properties.pricingTier,coverage:properties.resourcesCoverageStatus,trial:properties.freeTrialRemainingTime}" `
+  --output table
+```
+
+When enabled, expect `plan` to be `AI` and `tier` to be `Standard`. An `accepted` probe result validates the request contract only; inspect a controlled Defender XDR alert before marking enrichment verified. Investigate incomplete coverage before relying on that enrichment. Treat plan disablement as a security and billing change that requires explicit approval.
 
 ## Private-network troubleshooting
 
@@ -100,6 +155,8 @@ Do not re-enable public Azure OpenAI access as the first diagnostic step. Captur
 - Remove obsolete APIM operations with `scripts/remove-obsolete-apim-operation.ps1`; preview with `-WhatIf` first.
 - Retain the recoverable legacy revision for seven days after approved cutover, then remove the legacy branch through Bicep.
 - Review APIM capacity, Azure OpenAI provisioned capacity, Application Insights ingestion, and Log Analytics retention after each test wave.
+- `azd down --purge` removes the optional DeepSeek account with the resource group, but it does not revert the subscription-wide Defender pricing plan.
+- To disable Defender after explicit approval, update `Microsoft.Security/pricings/AI` to `pricingTier: Free` at subscription scope and verify the effective tier. Setting `ENABLE_DEFENDER_FOR_AI=false` only stops this template from managing the plan.
 - Delete temporary parity, load, and retirement artifacts only after attaching the approved evidence to the change record.
 - To remove the complete disposable environment, confirm the selected azd environment and evidence retention first, then run `azd down --purge`.
 

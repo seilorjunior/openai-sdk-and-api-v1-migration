@@ -1,7 +1,9 @@
 import os
 import tempfile
+import threading
 import unittest
 from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -174,6 +176,26 @@ class LoadAndCompareTests(unittest.TestCase):
         legacy_client = load_test.get_thread_client("apim", "legacy")
 
         self.assertIsNot(v1_client, legacy_client)
+        self.assertEqual(build_chat_client.call_count, 2)
+
+    @patch("load_test.build_chat_client")
+    def test_thread_client_is_reused_within_workers_and_isolated_across_threads(self, build_chat_client) -> None:
+        build_chat_client.side_effect = lambda *_: object()
+        barrier = threading.Barrier(2)
+
+        def get_clients() -> tuple[object, object]:
+            barrier.wait()
+            return (
+                load_test.get_thread_client("apim", "v1"),
+                load_test.get_thread_client("apim", "v1"),
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            worker_results = [future.result() for future in [executor.submit(get_clients), executor.submit(get_clients)]]
+
+        self.assertIs(worker_results[0][0], worker_results[0][1])
+        self.assertIs(worker_results[1][0], worker_results[1][1])
+        self.assertIsNot(worker_results[0][0], worker_results[1][0])
         self.assertEqual(build_chat_client.call_count, 2)
 
     @patch("load_test.invoke")

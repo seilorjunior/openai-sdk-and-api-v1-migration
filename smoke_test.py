@@ -13,7 +13,7 @@ from typing import Any, Literal, cast
 
 from azure.ai.inference import ChatCompletionsClient
 from azure.core.exceptions import AzureError
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from azure.identity import AzureCliCredential, DefaultAzureCredential, get_bearer_token_provider
 from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI, OpenAI
 
 ApiMode = Literal["v1", "legacy"]
@@ -41,8 +41,10 @@ def client_options(target: str, api_mode: ApiMode | None = None) -> dict[str, ob
     timeout = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
     max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
     if target == "direct":
+        tenant_id = os.getenv("AZURE_OPENAI_TENANT_ID")
+        credential = AzureCliCredential(tenant_id=tenant_id) if tenant_id else DefaultAzureCredential()
         token_provider = get_bearer_token_provider(
-            DefaultAzureCredential(),
+            credential,
             "https://ai.azure.com/.default",
         )
         return {
