@@ -83,7 +83,7 @@ A política dual cobre somente a operação existente de chat. As demais operaç
 
 - Python 3.10 ou posterior (o CI valida 3.10-3.13).
 - Azure CLI e Azure Developer CLI (`azd`) autenticadas.
-- Permissão para criar os recursos descritos em `infra/` e atribuir papéis RBAC.
+- Permissão para criar os recursos descritos em `infra/`, atribuir papéis RBAC e atualizar o preço do Microsoft Defender for Cloud no escopo da assinatura.
 - Para o smoke test: deployment ativo, chave do APIM e identidade Entra com acesso no teste direto.
 - A identidade gerenciada do APIM deve possuir `Cognitive Services User` no recurso de IA.
 - PowerShell 7 para os scripts operacionais em `scripts/`.
@@ -94,7 +94,7 @@ A política dual cobre somente a operação existente de chat. As demais operaç
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest --cov --cov-report=term-missing
+python -m pytest --cov --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=65
 python -m ruff check .
 python -m mypy
 python -m pip_audit --no-deps -r requirements.txt
@@ -103,7 +103,9 @@ az bicep lint --file infra/main.bicep
 az bicep lint --file infra/resources.bicep
 ```
 
-Os testes, lint, type checks e validação do Bicep são determinísticos e não exigem credenciais Azure live. O workflow `Migration validation` do GitHub Actions executa pytest com cobertura mínima de 60% em Python 3.10-3.13, além de Ruff e mypy bloqueantes e auditoria de vulnerabilidades em um ambiente Python 3.13 limpo. Ele também compila e valida o Bicep, faz parse dos JSONs ARM gerado e de parâmetros, analisa todos os scripts PowerShell operacionais com PSScriptAnalyzer e publica `migration-scan.sarif`. O Dependabot verifica semanalmente dependências pip e GitHub Actions, enquanto as actions dos workflows são fixadas por SHA imutável. `requirements-dev.txt` é opcional e atende apenas aos checks locais/CI; não é exigido pelos comandos em runtime. O `.pre-commit-config.yaml` opcional executa o mesmo check não mutável do Ruff antes dos commits.
+A suíte determinística cobre construção e normalização de clientes, cancelamento assíncrono e cleanup, adaptadores de capacidades, clientes thread-local do teste de carga, comparação de respostas, findings de migração legada, evidência de retirada, validação do APIM, redação de segredos, retries e comportamento de saída dos CLIs. Esses testes usam mocks nos limites dos SDKs, Azure CLI e processos e não exigem credenciais Azure live. O comando de cobertura mede branches, exibe linhas não cobertas, grava `coverage.xml` e aplica o mesmo limite mínimo de 65% do CI.
+
+O workflow `Migration validation` do GitHub Actions executa a suíte em Python 3.10-3.13, com Ruff e mypy bloqueantes, e audita as dependências de runtime em um ambiente Python 3.13 limpo. Ele também compila e valida o Bicep, faz parse dos JSONs ARM gerado e de parâmetros, analisa todos os scripts PowerShell operacionais com PSScriptAnalyzer e publica `migration-scan.sarif`. O Dependabot verifica semanalmente dependências pip e GitHub Actions, enquanto as actions dos workflows são fixadas por SHA imutável. `requirements-dev.txt` é opcional e atende somente aos checks locais e de CI; os comandos não precisam dele em runtime. O `.pre-commit-config.yaml` opcional executa o mesmo check não mutável do Ruff antes dos commits.
 
 ## Escanear uma frota de aplicações
 
@@ -118,7 +120,7 @@ O scanner identifica `azure-ai-inference`, `ChatCompletionsClient`, `/models`, v
 
 ## Provisionar com Azure Developer CLI
 
-O projeto inclui Bicep compatível com `azd` para criar um ambiente isolado com Azure OpenAI, deployment `gpt-4.1-mini`, APIM Developer, identidade gerenciada, Application Insights, Log Analytics, alertas e RBAC.
+O projeto inclui Bicep compatível com `azd` para criar um ambiente isolado com Azure OpenAI, deployment `gpt-4.1-mini`, APIM Developer, identidade gerenciada, Application Insights, Log Analytics, alertas e RBAC. O Microsoft Defender for AI Services e o deployment DeepSeek separado ficam desabilitados por padrão porque geram cobrança no escopo da assinatura ou consomem cota de modelo.
 
 ```powershell
 azd auth login
@@ -128,7 +130,21 @@ azd env set AZURE_LOCATION 'brazilsouth'
 azd env set APIM_LOCATION 'centralus'
 azd env set APIM_PUBLISHER_EMAIL '<email-do-publisher>'
 azd env set TELEMETRY_READER_PRINCIPAL_ID '<object-id-do-leitor-de-telemetria>'
+# Opt-in explícito: habilita um plano de segurança cobrado em toda a assinatura.
+azd env set ENABLE_DEFENDER_FOR_AI true
 azd provision
+```
+
+O Defender for AI Services se aplica à assinatura selecionada, não somente ao resource group deste ambiente azd. `ENABLE_DEFENDER_FOR_AI=false` não altera a configuração existente da assinatura. Quando habilitada explicitamente, a camada `Standard` é cobrada após qualquer período de avaliação ou promoção aplicável. Confirme a assinatura de destino antes do provisionamento.
+
+Verifique a configuração de preço e a cobertura dos recursos:
+
+```powershell
+$subscriptionId = az account show --query id -o tsv
+$uri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Security/pricings/AI?api-version=2024-01-01"
+az rest --method get --uri $uri `
+  --query "{plan:name,tier:properties.pricingTier,coverage:properties.resourcesCoverageStatus,trial:properties.freeTrialRemainingTime}" `
+  --output table
 ```
 
 `TELEMETRY_READER_PRINCIPAL_ID` é opcional. Quando definido, o Bicep concede `Monitoring Reader` somente no componente Application Insights; não é necessário conceder acesso ao workspace Log Analytics. Para o usuário autenticado, obtenha o object ID com `az ad signed-in-user show --query id -o tsv`.
@@ -140,17 +156,31 @@ O deployment também aceita as configurações opcionais abaixo no `azd`; os val
 | `AZURE_OPENAI_MODEL_NAME` | `gpt-4.1-mini` | Modelo implantado no Azure OpenAI. |
 | `AZURE_OPENAI_MODEL_VERSION` | `2025-04-14` | Versão do modelo. |
 | `AZURE_OPENAI_DEPLOYMENT_SKU` | `GlobalStandard` | SKU do deployment. |
-| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `10` | Capacidade do deployment. |
+| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `4990` | Alvo máximo pontual de escala do deployment `gpt-4.1-mini` Global Standard existente no Brazil South; consulte a capacidade novamente antes do provisionamento. |
 | `APIM_SKU_NAME` / `APIM_CAPACITY` | `Developer` / `1` | Camada e unidades do APIM. |
 | `APIM_RATE_LIMIT_CALLS_PER_MINUTE` | `60` | Requisições permitidas por minuto por assinatura ou IP do cliente. |
 | `APIM_BACKEND_RETRY_COUNT` / `APIM_BACKEND_RETRY_INTERVAL_SECONDS` | `2` / `1` | Tentativas e intervalo inicial do APIM somente para respostas `5xx` do backend. |
 | `APIM_TELEMETRY_SAMPLING_PERCENTAGE` | `100` | Percentual da telemetria de requisições APIM enviado ao Application Insights. |
 | `APIM_FAILED_REQUESTS_ALERT_THRESHOLD` | `5` | Falhas em cinco minutos necessárias para disparar o alerta. |
 | `APIM_ALERT_EMAIL` | email do publisher | Destinatário do alerta quando diferente do publisher do APIM. |
+| `ENABLE_DEFENDER_FOR_AI` | `false` | Habilita o plano cobrado Defender for AI Services `Standard` em toda a assinatura. |
+| `ENABLE_DEEPSEEK` | `false` | Cria uma conta Foundry separada e um deployment DeepSeek. |
+| `AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME` | gerado | Nome globalmente único opcional para a conta Foundry. |
+| `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT` | `DeepSeek-V4-Flash` | Nome do deployment DeepSeek. |
+| `AZURE_OPENAI_DEEPSEEK_MODEL_NAME` / `AZURE_OPENAI_DEEPSEEK_MODEL_VERSION` | `DeepSeek-V4-Flash` / `2026-04-23` | Modelo e versão do catálogo; confirme disponibilidade regional antes do provisionamento. |
+| `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_SKU` / `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_CAPACITY` | `GlobalStandard` / `1` | SKU e capacidade DeepSeek que consome cota. |
 | `ENABLE_PRIVATE_NETWORKING` | `false` | Habilita integração do APIM com VNet e private endpoint do Azure OpenAI. |
 | `APIM_SUBNET_RESOURCE_ID` | vazio | Subnet dedicada do APIM; obrigatória com rede privada. |
 | `PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID` | vazio | Subnet do private endpoint; obrigatória com rede privada. |
 | `VIRTUAL_NETWORK_RESOURCE_ID` | vazio | VNet vinculada à zona DNS privada do Azure OpenAI. |
+
+O padrão de capacidade `4990` é o alvo de escala do deployment existente nesta assinatura, calculado em 21 de agosto de 2026 como as `10` unidades atuais mais `4980` unidades adicionais informadas pela API Model Capacities do Azure. Cada unidade deste deployment `gpt-4.1-mini` Global Standard fornece 1.000 TPM e 1 RPM. Portanto, o alvo representa 4,99 milhões de TPM e 4.990 RPM.
+
+A capacidade disponível varia conforme a cota da assinatura, a capacidade regional do serviço e os outros deployments. Antes do provisionamento, use o procedimento da API Model Capacities em `RUNBOOK.md`. Ao escalar este mesmo deployment, o alvo máximo é a capacidade atual mais `availableCapacity`. Para um novo deployment, o alvo não pode exceder `availableCapacity`. Defina um valor menor quando a API informar menos capacidade:
+
+```powershell
+azd env set AZURE_OPENAI_DEPLOYMENT_CAPACITY '<capacidade-disponivel>'
+```
 
 O provisionamento do APIM pode levar vários minutos. Ao concluir, o `azd` grava endpoints e nomes não secretos no ambiente. Carregue-os na sessão atual e alinhe o Azure CLI à mesma assinatura:
 
@@ -275,6 +305,60 @@ python .\capability_test.py --target direct --capability all
 $env:OPENAI_SAFETY_PROMPT = '<prompt-de-teste-aprovado>'
 python .\capability_test.py --target apim --capability safety
 ```
+
+Para comprovar o envio de contexto de aplicação e usuário recomendado pelo Microsoft Defender for Cloud, configure valores sintéticos ou de uma conta de teste. `OPENAI_SECURITY_END_USER_ID` deve ser o object ID do usuário no Microsoft Entra ID, sem nome, email ou outro dado pessoal. O IP deve ser obtido por uma camada de servidor confiável, não diretamente de um header controlado pelo cliente:
+
+```powershell
+$env:OPENAI_SECURITY_APPLICATION_NAME = 'openai-migration-lab'
+$env:OPENAI_SECURITY_END_USER_ID = '<entra-user-object-id-de-teste>'
+$env:OPENAI_SECURITY_END_USER_TENANT_ID = '<entra-tenant-id>'
+$env:OPENAI_SECURITY_SOURCE_IP = '<ip-do-cliente-de-teste>'
+
+python .\user_security_context_test.py --target direct
+python .\user_security_context_test.py --target apim
+```
+
+O probe envia `user_security_context` por `extra_body`, exige nome da aplicação, ID do usuário e IP, e omite esses valores da saída por padrão. IDs de usuário e tenant opcional devem ser UUIDs canônicos, a origem deve ser um IPv4 ou IPv6 válido e o nome da aplicação não pode ter espaços nas bordas ou caracteres de controle. Um deployment que rejeite o campo com `unrecognized_request_argument` será reportado como `unsupported`, com código de saída `2`. Um resultado `accepted` com `validation_level: request` comprova somente que a API aceitou o payload exato; no APIM, também comprova que a policy encaminhou o corpo. Ele não comprova enriquecimento de alertas no Defender, que permanece `defender_enrichment_verified: false` até a inspeção de um alerta controlado no Defender XDR. `context_source` informa se os valores vieram do ambiente ou do modo sintético explícito.
+
+Documentação oficial da Microsoft:
+
+- [Obter contexto de aplicação e usuário final para alertas de IA](https://learn.microsoft.com/azure/defender-for-cloud/gain-end-user-context-ai) define as versões compatíveis das APIs e dos SDKs e exclui modelos consumidos pela Azure AI Model Inference API.
+- [API REST Azure OpenAI: criar chat completion](https://learn.microsoft.com/azure/ai-foundry/openai/reference-preview-latest?view=foundry-classic#create-chat-completion) documenta `user_security_context` no corpo da requisição de Chat Completions.
+- [Ciclo de vida da API Azure OpenAI](https://learn.microsoft.com/azure/ai-foundry/openai/api-version-lifecycle#changes-between-2024-12-01-preview-and-2024-10-01-preview) registra quando `user_security_context` foi introduzido.
+- [Modelos Foundry vendidos pelo Azure](https://learn.microsoft.com/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure) distingue modelos Azure OpenAI de outras coleções, como DeepSeek.
+
+Para diagnostico com o cliente, imprima o request JSON e a resposta completa do SDK somente com a confirmacao explicita de dados sensiveis:
+
+```powershell
+python .\user_security_context_test.py --target direct `
+  --print-full-exchange `
+  --acknowledge-sensitive-output
+```
+
+Essa saida de diagnostico contem prompt, nome da aplicacao, IDs do usuario e tenant, IP de origem, resposta do modelo, metadados e uso de tokens. Nao a anexe a um chamado ou email sem revisao. O probe nao coleta nem imprime headers HTTP, API keys, subscription keys do APIM, bearer tokens ou outras credenciais de autenticacao.
+
+Para salvar o mesmo request e response completos como JSON formatado, em vez de imprimi-los no console, use um caminho dentro de um diretorio existente:
+
+```powershell
+python .\user_security_context_test.py --target direct `
+  --save-full-exchange .\user-security-context-exchange.json `
+  --acknowledge-sensitive-output
+```
+
+O comando grava o arquivo tanto em respostas de sucesso quanto em erros HTTP da API. A saida do console inclui `full_exchange_file` com o caminho salvo.
+
+Com `--target direct`, o probe lê automaticamente do ambiente `azd` atual os valores ausentes de `AZURE_OPENAI_BASE_URL` e `AZURE_OPENAI_DEPLOYMENT`. Ele nunca inventa contexto de usuário silenciosamente. Use `--use-synthetic-context` explicitamente para valores documentados de laboratório ou defina todas as variáveis `OPENAI_SECURITY_*` obrigatórias para evidência derivada do ambiente.
+
+Para testar o mesmo payload especificamente no DeepSeek, use o runner dedicado. Por padrao, ele seleciona o deployment `DeepSeek-V4-Flash` do lab e salva o exchange em um arquivo separado:
+
+```powershell
+python .\deepseek_user_security_context_test.py `
+  --use-synthetic-context `
+  --save-full-exchange .\deepseek-user-security-context-exchange.json `
+  --acknowledge-sensitive-output
+```
+
+Para provisionar o deployment opcional, defina `ENABLE_DEEPSEEK=true`, confirme disponibilidade regional e cota e execute `azd provision`. O azd então exporta `AZURE_OPENAI_DEEPSEEK_BASE_URL`, `AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME` e `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT`. Base URL ausente retorna JSON sanitizado com código `1`; `unsupported` com código `2` confirma que o request chegou ao deployment, mas sua superfície rejeitou `user_security_context`.
 
 O teste de carga impõe no máximo 10.000 requisições por modo e concorrência 100. Acima de 1.000 por modo, exige `--confirm-large-load`. Cada thread worker constrói e reutiliza um cliente por modo de API em vez de criar um novo cliente a cada requisição, então a latência medida reflete o tempo de requisição, não a criação repetida de conexão/cliente. Use `--warmup-requests` (0-100, padrão 0) para executar requisições não medidas antes da rodada cronometrada e aquecer conexões/tokens de autenticação. Qualquer falha no warm-up emite somente a classificação sanitizada da exceção e interrompe a execução antes do tráfego medido. O relatório inclui percentis, tokens, `failures_by_type` (classe da exceção), `failures_by_category` (`transport` para falhas de conexão/timeout, `request` para falhas HTTP/configuração, `other` para as demais) e custo somente quando as tarifas aprovadas são fornecidas:
 
@@ -408,6 +492,9 @@ O gate é um canário sintético, não uma divisão percentual de tráfego. Para
 | `OPENAI_MAX_RETRIES` | opções de cliente do `smoke_test.py` | Tentativas de retry gerenciadas pelo SDK; padrão de 2. |
 | `OPENAI_INPUT_USD_PER_1M_TOKENS` / `OPENAI_OUTPUT_USD_PER_1M_TOKENS` | `load_test.py` | Tarifas aprovadas opcionais que habilitam `estimated_cost_usd` nos relatórios. |
 | `OPENAI_SAFETY_PROMPT` | `capability_test.py --capability safety` | Prompt sintético aprovado para o probe de segurança/filtro de conteúdo. |
+| `OPENAI_SECURITY_APPLICATION_NAME` | `user_security_context_test.py` | Nome simples da aplicação de teste enviado ao Defender for Cloud. |
+| `OPENAI_SECURITY_END_USER_ID` / `OPENAI_SECURITY_END_USER_TENANT_ID` | `user_security_context_test.py` | Object IDs do usuário de teste e, opcionalmente, do tenant no Microsoft Entra ID. Não use nome ou email. |
+| `OPENAI_SECURITY_SOURCE_IP` | `user_security_context_test.py` | IP do usuário de teste obtido por uma camada de servidor confiável. |
 | `AZURE_SUBSCRIPTION_ID` | `validate_apim.py` (modo live), comandos `azd`/`az` | Assinatura que contém o serviço APIM, quando não inferida de `az account show`. |
 | `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` | Gate live do GitHub Actions (OIDC) | Identidade federada usada somente pelo workflow manual e protegido de gate live. |
 

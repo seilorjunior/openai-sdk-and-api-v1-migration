@@ -32,8 +32,10 @@ jobs:
           --cov=migration_scan
           --cov=retirement_report
           --cov=validate_apim
+          --cov-branch
           --cov-report=term-missing
-          --cov-fail-under=60
+          --cov-report=xml
+          --cov-fail-under=65
       - name: Generate migration scan evidence
         if: ${{ matrix.python-version == '3.13' }}
         run: python migration_scan.py . --format sarif --output migration-scan.sarif

@@ -26,8 +26,8 @@ param modelVersion string = '2025-04-14'
 param modelDeploymentSku string = 'GlobalStandard'
 
 @minValue(1)
-@description('Azure OpenAI deployment capacity.')
-param modelDeploymentCapacity int = 10
+@description('Azure OpenAI deployment capacity. The default uses the maximum currently available gpt-4.1-mini GlobalStandard quota for this subscription in Brazil South.')
+param modelDeploymentCapacity int = 4990
 
 @description('API Management SKU.')
 param apimSkuName string = 'Developer'
@@ -75,12 +75,45 @@ param privateEndpointSubnetResourceId string = ''
 @description('Resource ID of the VNet linked to privatelink.openai.azure.com. Required when private networking is enabled.')
 param virtualNetworkResourceId string = ''
 
+@description('Enable the subscription-wide, billable Microsoft Defender for AI Services plan.')
+param enableDefenderForAI bool = false
+
+@description('Deploy an optional Microsoft Foundry account and DeepSeek model deployment.')
+param enableDeepSeek bool = false
+
+@description('Globally unique Microsoft Foundry account name for DeepSeek. Leave empty to generate one.')
+param deepSeekAccountName string = ''
+
+@description('DeepSeek deployment name exposed to API clients.')
+param deepSeekDeploymentName string = 'DeepSeek-V4-Flash'
+
+@description('DeepSeek model name from the regional model catalog.')
+param deepSeekModelName string = 'DeepSeek-V4-Flash'
+
+@description('DeepSeek model version from the regional model catalog.')
+param deepSeekModelVersion string = '2026-04-23'
+
+@description('DeepSeek deployment SKU.')
+param deepSeekDeploymentSku string = 'GlobalStandard'
+
+@minValue(1)
+@description('DeepSeek deployment capacity in quota units.')
+param deepSeekDeploymentCapacity int = 1
+
 var resourceGroupName = 'rg-${environmentName}'
 var resourceToken = uniqueString(subscription().id, location, environmentName)
 var apimResourceToken = uniqueString(subscription().id, apimLocation, environmentName)
 var validatedApimSubnetResourceId = !enablePrivateNetworking || !empty(apimSubnetResourceId) ? apimSubnetResourceId : fail('apimSubnetResourceId is required when enablePrivateNetworking is true.')
 var validatedPrivateEndpointSubnetResourceId = !enablePrivateNetworking || !empty(privateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : fail('privateEndpointSubnetResourceId is required when enablePrivateNetworking is true.')
 var validatedVirtualNetworkResourceId = !enablePrivateNetworking || !empty(virtualNetworkResourceId) ? virtualNetworkResourceId : fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.')
+var resolvedDeepSeekAccountName = empty(deepSeekAccountName) ? 'aif-${resourceToken}' : deepSeekAccountName
+
+resource defenderForAI 'Microsoft.Security/pricings@2024-01-01' = if (enableDefenderForAI) {
+  name: 'AI'
+  properties: {
+    pricingTier: 'Standard'
+  }
+}
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
@@ -120,6 +153,20 @@ module resources 'resources.bicep' = {
   }
 }
 
+module deepSeek 'deepseek-deployment.bicep' = if (enableDeepSeek) {
+  name: 'deepseek-${resourceToken}'
+  scope: resourceGroup
+  params: {
+    location: location
+    accountName: resolvedDeepSeekAccountName
+    deploymentName: deepSeekDeploymentName
+    modelName: deepSeekModelName
+    modelVersion: deepSeekModelVersion
+    skuName: deepSeekDeploymentSku
+    capacity: deepSeekDeploymentCapacity
+  }
+}
+
 output RESOURCE_GROUP_ID string = resourceGroup.id
 output AZURE_LOCATION string = location
 output APIM_LOCATION string = apimLocation
@@ -132,3 +179,8 @@ output APIM_OPENAI_BASE_URL string = resources.outputs.apimOpenAIBaseUrl
 output APIM_SUBSCRIPTION_ID string = resources.outputs.apimSubscriptionId
 output APPLICATION_INSIGHTS_NAME string = resources.outputs.applicationInsightsName
 output LOG_ANALYTICS_WORKSPACE_NAME string = resources.outputs.logAnalyticsWorkspaceName
+output DEFENDER_FOR_AI_ENABLED bool = enableDefenderForAI
+output DEEPSEEK_ENABLED bool = enableDeepSeek
+output AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME string = enableDeepSeek ? deepSeek!.outputs.foundryAccountName : ''
+output AZURE_OPENAI_DEEPSEEK_BASE_URL string = enableDeepSeek ? deepSeek!.outputs.foundryAccountOpenAIBaseUrl : ''
+output AZURE_OPENAI_DEEPSEEK_DEPLOYMENT string = enableDeepSeek ? deepSeek!.outputs.deploymentName : ''
