@@ -23,7 +23,7 @@ class UserSecurityContextTestTests(unittest.TestCase):
             "AZURE_OPENAI_DEPLOYMENT": "chat-deployment",
         }.get
 
-        user_security_context_test.configure_lab_environment("direct")
+        context_source = user_security_context_test.configure_lab_environment("direct", use_synthetic_context=True)
 
         self.assertEqual(
             os.environ["AZURE_OPENAI_BASE_URL"],
@@ -32,6 +32,15 @@ class UserSecurityContextTestTests(unittest.TestCase):
         self.assertEqual(os.environ["AZURE_OPENAI_DEPLOYMENT"], "chat-deployment")
         for name, value in user_security_context_test.LAB_SECURITY_CONTEXT_DEFAULTS.items():
             self.assertEqual(os.environ[name], value)
+        self.assertEqual(context_source, "synthetic")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_configure_lab_environment_does_not_silently_add_synthetic_context(self) -> None:
+        context_source = user_security_context_test.configure_lab_environment("apim")
+
+        self.assertEqual(context_source, "environment")
+        for name in user_security_context_test.LAB_SECURITY_CONTEXT_DEFAULTS:
+            self.assertNotIn(name, os.environ)
 
     @patch.dict(
         os.environ,
@@ -103,7 +112,7 @@ class UserSecurityContextTestTests(unittest.TestCase):
         context = {
             "AZURE_OPENAI_DEPLOYMENT": "chat-deployment",
             "OPENAI_SECURITY_APPLICATION_NAME": "private-application",
-            "OPENAI_SECURITY_END_USER_ID": "private-user-id",
+            "OPENAI_SECURITY_END_USER_ID": "11111111-1111-1111-1111-111111111111",
             "OPENAI_SECURITY_SOURCE_IP": "192.0.2.10",
         }
 
@@ -115,10 +124,13 @@ class UserSecurityContextTestTests(unittest.TestCase):
         self.assertEqual(
             payload,
             {
+                "context_source": "environment",
+                "defender_enrichment_verified": False,
                 "output_nonempty": True,
                 "security_context_submitted": True,
-                "status": "passed",
+                "status": "accepted",
                 "target": "apim",
+                "validation_level": "request",
                 "customer_explanation": user_security_context_test.CUSTOMER_EXPLANATION,
             },
         )
@@ -171,12 +183,54 @@ class UserSecurityContextTestTests(unittest.TestCase):
             json.loads(output.getvalue()),
             {
                 "error_code": "unrecognized_request_argument",
+                "context_source": "environment",
                 "reason": "deployment_or_api_does_not_support_user_security_context",
                 "status": "unsupported",
                 "target": "direct",
                 "customer_explanation": user_security_context_test.CUSTOMER_EXPLANATION,
             },
         )
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
+            "AZURE_OPENAI_DEPLOYMENT": "DeepSeek-V4-Flash",
+            "OPENAI_SECURITY_APPLICATION_NAME": "openai-migration-lab",
+            "OPENAI_SECURITY_END_USER_ID": "11111111-1111-1111-1111-111111111111",
+            "OPENAI_SECURITY_SOURCE_IP": "192.0.2.10",
+        },
+        clear=True,
+    )
+    @patch("user_security_context_test.build_client")
+    def test_main_classifies_nested_rejected_context_as_unsupported(self, build_client: Mock) -> None:
+        response = httpx.Response(
+            400,
+            request=httpx.Request("POST", "https://example.openai.azure.com/openai/v1/chat/completions"),
+        )
+        build_client.return_value.chat.completions.create.side_effect = BadRequestError(
+            "Bad request",
+            response=response,
+            body={
+                "error": {
+                    "code": "unrecognized_request_argument",
+                    "message": "Unrecognized request argument supplied: user_security_context",
+                }
+            },
+        )
+        args = Namespace(
+            target="direct",
+            prompt="test",
+            print_full_exchange=False,
+            acknowledge_sensitive_output=False,
+            save_full_exchange=None,
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            exit_code = user_security_context_test.main(args)
+
+        self.assertEqual(exit_code, 2)
+        self.assertEqual(json.loads(output.getvalue())["status"], "unsupported")
 
     @patch(
         "user_security_context_test.parse_args",
@@ -203,7 +257,7 @@ class UserSecurityContextTestTests(unittest.TestCase):
             "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "AZURE_OPENAI_DEPLOYMENT": "chat-deployment",
             "OPENAI_SECURITY_APPLICATION_NAME": "private-application",
-            "OPENAI_SECURITY_END_USER_ID": "private-user-id",
+            "OPENAI_SECURITY_END_USER_ID": "11111111-1111-1111-1111-111111111111",
             "OPENAI_SECURITY_SOURCE_IP": "192.0.2.10",
         },
         clear=True,
@@ -239,7 +293,7 @@ class UserSecurityContextTestTests(unittest.TestCase):
         self.assertEqual(exchange["request_body"]["model"], "chat-deployment")
         self.assertEqual(
             exchange["request_body"]["user_security_context"]["end_user_id"],
-            "private-user-id",
+            "11111111-1111-1111-1111-111111111111",
         )
         self.assertNotIn("extra_body", exchange["request_body"])
         self.assertEqual(exchange["response_body"]["id"], "chatcmpl-test")
@@ -252,7 +306,7 @@ class UserSecurityContextTestTests(unittest.TestCase):
             "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "AZURE_OPENAI_DEPLOYMENT": "chat-deployment",
             "OPENAI_SECURITY_APPLICATION_NAME": "private-application",
-            "OPENAI_SECURITY_END_USER_ID": "private-user-id",
+            "OPENAI_SECURITY_END_USER_ID": "11111111-1111-1111-1111-111111111111",
             "OPENAI_SECURITY_SOURCE_IP": "192.0.2.10",
         },
         clear=True,
@@ -285,11 +339,72 @@ class UserSecurityContextTestTests(unittest.TestCase):
             exchange = json.loads(output_path.read_text(encoding="utf-8"))
 
         self.assertEqual(exit_code, 0)
-        self.assertEqual(exchange["request_body"]["user_security_context"]["end_user_id"], "private-user-id")
+        self.assertEqual(
+            exchange["request_body"]["user_security_context"]["end_user_id"],
+            "11111111-1111-1111-1111-111111111111",
+        )
         self.assertEqual(exchange["response_body"]["id"], "chatcmpl-saved")
         self.assertNotIn("full_exchange", json.loads(output.getvalue()))
         self.assertNotIn("authorization", json.dumps(exchange).lower())
         self.assertNotIn("api_key", json.dumps(exchange).lower())
+
+    @patch.dict(
+        os.environ,
+        {
+            "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
+            "AZURE_OPENAI_DEPLOYMENT": "chat-deployment",
+            "OPENAI_SECURITY_APPLICATION_NAME": "private-application",
+            "OPENAI_SECURITY_END_USER_ID": "11111111-1111-1111-1111-111111111111",
+            "OPENAI_SECURITY_SOURCE_IP": "192.0.2.10",
+        },
+        clear=True,
+    )
+    @patch("user_security_context_test.save_full_exchange", side_effect=OSError("disk full"))
+    @patch("user_security_context_test.build_client")
+    def test_main_fails_when_requested_exchange_cannot_be_saved(
+        self,
+        build_client: Mock,
+        _: Mock,
+    ) -> None:
+        response = Mock()
+        response.choices = [SimpleNamespace(message=SimpleNamespace(content="accepted"))]
+        response.model_dump.return_value = {"id": "chatcmpl-test"}
+        build_client.return_value.chat.completions.create.return_value = response
+        args = Namespace(
+            target="direct",
+            prompt="test",
+            print_full_exchange=False,
+            acknowledge_sensitive_output=True,
+            save_full_exchange=Path("exchange.json"),
+        )
+
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            exit_code = user_security_context_test.main(args)
+
+        self.assertEqual(exit_code, 1)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("disk full", payload["error"])
+
+    def test_build_user_security_context_rejects_invalid_values(self) -> None:
+        valid_context = {
+            "OPENAI_SECURITY_APPLICATION_NAME": "openai-migration-lab",
+            "OPENAI_SECURITY_END_USER_ID": "11111111-1111-1111-1111-111111111111",
+            "OPENAI_SECURITY_SOURCE_IP": "192.0.2.10",
+        }
+        invalid_values = (
+            ("OPENAI_SECURITY_END_USER_ID", "not-a-uuid", "valid UUID"),
+            ("OPENAI_SECURITY_END_USER_TENANT_ID", "not-a-uuid", "valid UUID"),
+            ("OPENAI_SECURITY_SOURCE_IP", "999.1.1.1", "valid IPv4 or IPv6"),
+            ("OPENAI_SECURITY_APPLICATION_NAME", " app ", "leading or trailing whitespace"),
+            ("OPENAI_SECURITY_APPLICATION_NAME", "app\nname", "control characters"),
+        )
+
+        for field_name, value, expected_message in invalid_values:
+            with self.subTest(field_name=field_name, value=value):
+                with patch.dict(os.environ, {**valid_context, field_name: value}, clear=True):
+                    with self.assertRaisesRegex(ValueError, expected_message):
+                        user_security_context_test.build_user_security_context()
 
 
 if __name__ == "__main__":

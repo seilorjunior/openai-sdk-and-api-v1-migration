@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -15,6 +16,11 @@ DEFAULT_DEEPSEEK_DEPLOYMENT = "DeepSeek-V4-Flash"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompt", default="Return only: DeepSeek user security context accepted")
+    parser.add_argument(
+        "--use-synthetic-context",
+        action="store_true",
+        help="Fill missing user-security-context values with documented synthetic test values.",
+    )
     parser.add_argument(
         "--print-full-exchange",
         action="store_true",
@@ -38,7 +44,8 @@ def main() -> int:
     args = parse_args()
     base_url = os.getenv("AZURE_OPENAI_DEEPSEEK_BASE_URL")
     if not base_url:
-        raise ValueError("AZURE_OPENAI_DEEPSEEK_BASE_URL is required.")
+        print(json.dumps({"status": "failed", "error": "AZURE_OPENAI_DEEPSEEK_BASE_URL is required."}))
+        return 1
 
     os.environ["AZURE_OPENAI_BASE_URL"] = base_url
     tenant_id = os.getenv("AZURE_OPENAI_DEEPSEEK_TENANT_ID")

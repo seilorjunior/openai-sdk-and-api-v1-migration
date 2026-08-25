@@ -61,3 +61,6 @@ resource deepSeekDeployment 'Microsoft.CognitiveServices/accounts/deployments@20
 
 output deploymentResourceId string = deepSeekDeployment.id
 output foundryAccountEndpoint string = foundryAccount.properties.endpoint
+output foundryAccountName string = foundryAccount.name
+output foundryAccountOpenAIBaseUrl string = '${foundryAccount.properties.endpoint}openai/v1'
+output deploymentName string = deepSeekDeployment.name

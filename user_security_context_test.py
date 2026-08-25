@@ -33,9 +33,12 @@ defaults and can be overridden with environment variables for customer tests.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import subprocess
+import unicodedata
+import uuid
 from pathlib import Path
 from typing import Any, cast
 
@@ -86,25 +89,56 @@ def get_azd_value(name: str) -> str:
     return value
 
 
-def configure_lab_environment(target: str) -> None:
-    for name, value in LAB_SECURITY_CONTEXT_DEFAULTS.items():
-        os.environ.setdefault(name, value)
+def configure_lab_environment(target: str, use_synthetic_context: bool = False) -> str:
+    context_source = "environment"
+    if use_synthetic_context:
+        for name, value in LAB_SECURITY_CONTEXT_DEFAULTS.items():
+            if not os.getenv(name):
+                os.environ[name] = value
+                context_source = "synthetic"
 
     if target == "direct":
         for name in ("AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_DEPLOYMENT"):
             if not os.getenv(name):
                 os.environ[name] = get_azd_value(name)
+    return context_source
+
+
+def validate_uuid(value: str, field_name: str) -> str:
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError as error:
+        raise ValueError(f"{field_name} must be a valid UUID.") from error
+    if str(parsed) != value.lower():
+        raise ValueError(f"{field_name} must use the canonical UUID format.")
+    return value
+
+
+def validate_application_name(value: str) -> str:
+    if value != value.strip():
+        raise ValueError("OPENAI_SECURITY_APPLICATION_NAME must not have leading or trailing whitespace.")
+    if any(unicodedata.category(character) == "Cc" for character in value):
+        raise ValueError("OPENAI_SECURITY_APPLICATION_NAME must not contain control characters.")
+    return value
+
+
+def validate_source_ip(value: str) -> str:
+    try:
+        ipaddress.ip_address(value)
+    except ValueError as error:
+        raise ValueError("OPENAI_SECURITY_SOURCE_IP must be a valid IPv4 or IPv6 address.") from error
+    return value
 
 
 def build_user_security_context() -> dict[str, str]:
     context = {
-        "application_name": require_env("OPENAI_SECURITY_APPLICATION_NAME"),
-        "end_user_id": require_env("OPENAI_SECURITY_END_USER_ID"),
-        "source_ip": require_env("OPENAI_SECURITY_SOURCE_IP"),
+        "application_name": validate_application_name(require_env("OPENAI_SECURITY_APPLICATION_NAME")),
+        "end_user_id": validate_uuid(require_env("OPENAI_SECURITY_END_USER_ID"), "OPENAI_SECURITY_END_USER_ID"),
+        "source_ip": validate_source_ip(require_env("OPENAI_SECURITY_SOURCE_IP")),
     }
     tenant_id = os.getenv("OPENAI_SECURITY_END_USER_TENANT_ID")
     if tenant_id:
-        context["end_user_tenant_id"] = tenant_id
+        context["end_user_tenant_id"] = validate_uuid(tenant_id, "OPENAI_SECURITY_END_USER_TENANT_ID")
     return context
 
 
@@ -133,13 +167,16 @@ def run_test(client: OpenAI, prompt: str) -> dict[str, bool]:
 
 
 def is_unsupported_user_security_context(error: APIStatusError) -> bool:
-    body = error.body
-    if not isinstance(body, dict):
-        return False
-
-    code = body.get("code")
-    message = body.get("message")
+    code, message = api_error_details(error.body)
     return code == "unrecognized_request_argument" and isinstance(message, str) and "user_security_context" in message
+
+
+def api_error_details(body: Any) -> tuple[Any, Any]:
+    if not isinstance(body, dict):
+        return None, None
+    nested_error = body.get("error")
+    error_body = nested_error if isinstance(nested_error, dict) else body
+    return error_body.get("code"), error_body.get("message")
 
 
 def serialize_response(response: Any) -> Any:
@@ -182,11 +219,8 @@ def include_or_save_full_exchange(
     if args.print_full_exchange:
         output["full_exchange"] = exchange
     if args.save_full_exchange is not None:
-        try:
-            save_full_exchange(args.save_full_exchange, exchange)
-            output["full_exchange_file"] = str(args.save_full_exchange)
-        except OSError as error:
-            output["full_exchange_file_error"] = str(error)
+        save_full_exchange(args.save_full_exchange, exchange)
+        output["full_exchange_file"] = str(args.save_full_exchange)
 
 
 def validate_sensitive_output_args(args: argparse.Namespace) -> None:
@@ -204,21 +238,25 @@ def api_error_body(error: APIStatusError) -> Any:
     }
 
 
-def passed_output(target: str, result: dict[str, bool]) -> dict[str, Any]:
+def accepted_output(target: str, result: dict[str, bool], context_source: str) -> dict[str, Any]:
     return {
         "target": target,
-        "status": "passed",
+        "status": "accepted",
+        "validation_level": "request",
+        "defender_enrichment_verified": False,
+        "context_source": context_source,
         "customer_explanation": CUSTOMER_EXPLANATION,
         **result,
     }
 
 
-def unsupported_output(target: str) -> dict[str, Any]:
+def unsupported_output(target: str, context_source: str) -> dict[str, Any]:
     return {
         "status": "unsupported",
         "error_code": "unrecognized_request_argument",
         "reason": "deployment_or_api_does_not_support_user_security_context",
         "target": target,
+        "context_source": context_source,
         "customer_explanation": CUSTOMER_EXPLANATION,
     }
 
@@ -227,6 +265,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=("direct", "apim"), required=True)
     parser.add_argument("--prompt", default="Return only: user security context accepted")
+    parser.add_argument(
+        "--use-synthetic-context",
+        action="store_true",
+        help="Fill missing user-security-context values with documented synthetic test values.",
+    )
     parser.add_argument(
         "--print-full-exchange",
         action="store_true",
@@ -249,12 +292,13 @@ def parse_args() -> argparse.Namespace:
 def main(args: argparse.Namespace | None = None) -> int:
     args = args or parse_args()
     request_body: dict[str, Any] | None = None
+    context_source = "environment"
     try:
         validate_sensitive_output_args(args)
-        configure_lab_environment(args.target)
+        context_source = configure_lab_environment(args.target, getattr(args, "use_synthetic_context", False))
         request_body = build_request_body(args.prompt)
         result, response = submit_request(build_client(args.target), request_body)
-        output = passed_output(args.target, result)
+        output = accepted_output(args.target, result, context_source)
         if args.print_full_exchange or args.save_full_exchange is not None:
             include_or_save_full_exchange(args, output, request_body, serialize_response(response))
         print(json.dumps(output, sort_keys=True))
@@ -264,7 +308,7 @@ def main(args: argparse.Namespace | None = None) -> int:
         return 1
     except APIStatusError as error:
         if is_unsupported_user_security_context(error):
-            output = unsupported_output(args.target)
+            output = unsupported_output(args.target, context_source)
             if (args.print_full_exchange or args.save_full_exchange is not None) and request_body is not None:
                 include_or_save_full_exchange(args, output, request_body, api_error_body(error))
             print(json.dumps(output, sort_keys=True))

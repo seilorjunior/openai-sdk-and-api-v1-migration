@@ -120,7 +120,7 @@ O scanner identifica `azure-ai-inference`, `ChatCompletionsClient`, `/models`, v
 
 ## Provisionar com Azure Developer CLI
 
-O projeto inclui Bicep compatível com `azd` para criar um ambiente isolado com Azure OpenAI, deployment `gpt-4.1-mini`, APIM Developer, identidade gerenciada, Application Insights, Log Analytics, alertas e RBAC. O entry point no escopo da assinatura também configura o plano Microsoft Defender for AI Services (`Microsoft.Security/pricings/AI`) na camada `Standard`.
+O projeto inclui Bicep compatível com `azd` para criar um ambiente isolado com Azure OpenAI, deployment `gpt-4.1-mini`, APIM Developer, identidade gerenciada, Application Insights, Log Analytics, alertas e RBAC. O Microsoft Defender for AI Services e o deployment DeepSeek separado ficam desabilitados por padrão porque geram cobrança no escopo da assinatura ou consomem cota de modelo.
 
 ```powershell
 azd auth login
@@ -130,10 +130,12 @@ azd env set AZURE_LOCATION 'brazilsouth'
 azd env set APIM_LOCATION 'centralus'
 azd env set APIM_PUBLISHER_EMAIL '<email-do-publisher>'
 azd env set TELEMETRY_READER_PRINCIPAL_ID '<object-id-do-leitor-de-telemetria>'
+# Opt-in explícito: habilita um plano de segurança cobrado em toda a assinatura.
+azd env set ENABLE_DEFENDER_FOR_AI true
 azd provision
 ```
 
-O Defender for AI Services se aplica à assinatura selecionada, não somente ao resource group deste ambiente azd. A camada `Standard` é cobrada após qualquer período de avaliação ou promoção aplicável. Confirme a assinatura de destino antes do provisionamento. A declaração é idempotente, portanto execuções posteriores de `azd provision` mantêm o plano habilitado.
+O Defender for AI Services se aplica à assinatura selecionada, não somente ao resource group deste ambiente azd. `ENABLE_DEFENDER_FOR_AI=false` não altera a configuração existente da assinatura. Quando habilitada explicitamente, a camada `Standard` é cobrada após qualquer período de avaliação ou promoção aplicável. Confirme a assinatura de destino antes do provisionamento.
 
 Verifique a configuração de preço e a cobertura dos recursos:
 
@@ -161,6 +163,12 @@ O deployment também aceita as configurações opcionais abaixo no `azd`; os val
 | `APIM_TELEMETRY_SAMPLING_PERCENTAGE` | `100` | Percentual da telemetria de requisições APIM enviado ao Application Insights. |
 | `APIM_FAILED_REQUESTS_ALERT_THRESHOLD` | `5` | Falhas em cinco minutos necessárias para disparar o alerta. |
 | `APIM_ALERT_EMAIL` | email do publisher | Destinatário do alerta quando diferente do publisher do APIM. |
+| `ENABLE_DEFENDER_FOR_AI` | `false` | Habilita o plano cobrado Defender for AI Services `Standard` em toda a assinatura. |
+| `ENABLE_DEEPSEEK` | `false` | Cria uma conta Foundry separada e um deployment DeepSeek. |
+| `AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME` | gerado | Nome globalmente único opcional para a conta Foundry. |
+| `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT` | `DeepSeek-V4-Flash` | Nome do deployment DeepSeek. |
+| `AZURE_OPENAI_DEEPSEEK_MODEL_NAME` / `AZURE_OPENAI_DEEPSEEK_MODEL_VERSION` | `DeepSeek-V4-Flash` / `2026-04-23` | Modelo e versão do catálogo; confirme disponibilidade regional antes do provisionamento. |
+| `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_SKU` / `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_CAPACITY` | `GlobalStandard` / `1` | SKU e capacidade DeepSeek que consome cota. |
 | `ENABLE_PRIVATE_NETWORKING` | `false` | Habilita integração do APIM com VNet e private endpoint do Azure OpenAI. |
 | `APIM_SUBNET_RESOURCE_ID` | vazio | Subnet dedicada do APIM; obrigatória com rede privada. |
 | `PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID` | vazio | Subnet do private endpoint; obrigatória com rede privada. |
@@ -310,7 +318,7 @@ python .\user_security_context_test.py --target direct
 python .\user_security_context_test.py --target apim
 ```
 
-O probe envia `user_security_context` por `extra_body`, exige nome da aplicação, ID do usuário e IP, e omite esses valores da saída por padrão. O tenant é opcional. A Microsoft documenta essa extensão para a API REST Azure OpenAI `2025-01-01` e superfícies compatíveis posteriores, mas não para modelos consumidos pela Azure AI Model Inference API. Execute o probe com um deployment Azure OpenAI direto, como o `gpt-4.1-mini` padrão do lab; um deployment que rejeite o campo com `unrecognized_request_argument` será reportado como `unsupported`, com código de saída `2`. Um resultado `passed` comprova que a API aceitou o payload; no alvo APIM, também comprova que a policy encaminhou o corpo. O Bicep do azd habilita a proteção contra ameaças para serviços de IA no escopo da assinatura. Para comprovar o enriquecimento do alerta, gere um alerta controlado em ambiente de teste e verifique o contexto no Defender XDR. A API aceita nomes de campos incorretos, portanto os testes unitários também verificam o formato exato sem depender de uma chamada live.
+O probe envia `user_security_context` por `extra_body`, exige nome da aplicação, ID do usuário e IP, e omite esses valores da saída por padrão. IDs de usuário e tenant opcional devem ser UUIDs canônicos, a origem deve ser um IPv4 ou IPv6 válido e o nome da aplicação não pode ter espaços nas bordas ou caracteres de controle. Um deployment que rejeite o campo com `unrecognized_request_argument` será reportado como `unsupported`, com código de saída `2`. Um resultado `accepted` com `validation_level: request` comprova somente que a API aceitou o payload exato; no APIM, também comprova que a policy encaminhou o corpo. Ele não comprova enriquecimento de alertas no Defender, que permanece `defender_enrichment_verified: false` até a inspeção de um alerta controlado no Defender XDR. `context_source` informa se os valores vieram do ambiente ou do modo sintético explícito.
 
 Documentação oficial da Microsoft:
 
@@ -339,17 +347,18 @@ python .\user_security_context_test.py --target direct `
 
 O comando grava o arquivo tanto em respostas de sucesso quanto em erros HTTP da API. A saida do console inclui `full_exchange_file` com o caminho salvo.
 
-Com `--target direct`, o probe le automaticamente do ambiente `azd` atual os valores ausentes de `AZURE_OPENAI_BASE_URL` e `AZURE_OPENAI_DEPLOYMENT`. Ele tambem fornece defaults sinteticos de laboratorio para os quatro valores `OPENAI_SECURITY_*`. Defina essas variaveis antes da execucao quando forem necessarios valores reais de identidade, tenant, aplicacao ou IP de origem do cliente.
+Com `--target direct`, o probe lê automaticamente do ambiente `azd` atual os valores ausentes de `AZURE_OPENAI_BASE_URL` e `AZURE_OPENAI_DEPLOYMENT`. Ele nunca inventa contexto de usuário silenciosamente. Use `--use-synthetic-context` explicitamente para valores documentados de laboratório ou defina todas as variáveis `OPENAI_SECURITY_*` obrigatórias para evidência derivada do ambiente.
 
 Para testar o mesmo payload especificamente no DeepSeek, use o runner dedicado. Por padrao, ele seleciona o deployment `DeepSeek-V4-Flash` do lab e salva o exchange em um arquivo separado:
 
 ```powershell
 python .\deepseek_user_security_context_test.py `
+  --use-synthetic-context `
   --save-full-exchange .\deepseek-user-security-context-exchange.json `
   --acknowledge-sensitive-output
 ```
 
-Defina `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT` para substituir o nome do deployment DeepSeek. Um resultado `unsupported` com codigo de saida `2` confirma que o request chegou ao deployment, mas a superficie da API rejeitou `user_security_context`.
+Para provisionar o deployment opcional, defina `ENABLE_DEEPSEEK=true`, confirme disponibilidade regional e cota e execute `azd provision`. O azd então exporta `AZURE_OPENAI_DEEPSEEK_BASE_URL`, `AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME` e `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT`. Base URL ausente retorna JSON sanitizado com código `1`; `unsupported` com código `2` confirma que o request chegou ao deployment, mas sua superfície rejeitou `user_security_context`.
 
 O teste de carga impõe no máximo 10.000 requisições por modo e concorrência 100. Acima de 1.000 por modo, exige `--confirm-large-load`. Cada thread worker constrói e reutiliza um cliente por modo de API em vez de criar um novo cliente a cada requisição, então a latência medida reflete o tempo de requisição, não a criação repetida de conexão/cliente. Use `--warmup-requests` (0-100, padrão 0) para executar requisições não medidas antes da rodada cronometrada e aquecer conexões/tokens de autenticação. Qualquer falha no warm-up emite somente a classificação sanitizada da exceção e interrompe a execução antes do tráfego medido. O relatório inclui percentis, tokens, `failures_by_type` (classe da exceção), `failures_by_category` (`transport` para falhas de conexão/timeout, `request` para falhas HTTP/configuração, `other` para as demais) e custo somente quando as tarifas aprovadas são fornecidas:
 

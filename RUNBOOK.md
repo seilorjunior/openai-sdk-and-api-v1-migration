@@ -116,11 +116,12 @@ The Developer APIM SKU has no production SLA. Select a production SKU and capaci
 
 ## Defender for AI Services verification
 
-The subscription-scoped Bicep entry point keeps the Microsoft Defender for AI Services `AI` plan at the billable `Standard` tier. Before running `azd provision`, verify that the selected subscription is the intended billing and security boundary:
+The subscription-scoped Bicep entry point changes Microsoft Defender for AI Services only when `ENABLE_DEFENDER_FOR_AI=true`. This explicit opt-in sets the subscription-wide `AI` plan to the billable `Standard` tier. Before enabling it or running `azd provision`, verify that the selected subscription is the intended billing and security boundary:
 
 ```powershell
 $subscriptionId = az account show --query id -o tsv
 azd env get-value AZURE_SUBSCRIPTION_ID
+azd env get-value ENABLE_DEFENDER_FOR_AI
 ```
 
 After provisioning, verify the effective plan and coverage:
@@ -132,7 +133,7 @@ az rest --method get --uri $uri `
   --output table
 ```
 
-Expect `plan` to be `AI` and `tier` to be `Standard`. Investigate incomplete coverage before relying on `user_security_context` for Defender alert enrichment. Treat plan disablement as a security and billing change that requires explicit approval.
+When enabled, expect `plan` to be `AI` and `tier` to be `Standard`. An `accepted` probe result validates the request contract only; inspect a controlled Defender XDR alert before marking enrichment verified. Investigate incomplete coverage before relying on that enrichment. Treat plan disablement as a security and billing change that requires explicit approval.
 
 ## Private-network troubleshooting
 
@@ -154,6 +155,8 @@ Do not re-enable public Azure OpenAI access as the first diagnostic step. Captur
 - Remove obsolete APIM operations with `scripts/remove-obsolete-apim-operation.ps1`; preview with `-WhatIf` first.
 - Retain the recoverable legacy revision for seven days after approved cutover, then remove the legacy branch through Bicep.
 - Review APIM capacity, Azure OpenAI provisioned capacity, Application Insights ingestion, and Log Analytics retention after each test wave.
+- `azd down --purge` removes the optional DeepSeek account with the resource group, but it does not revert the subscription-wide Defender pricing plan.
+- To disable Defender after explicit approval, update `Microsoft.Security/pricings/AI` to `pricingTier: Free` at subscription scope and verify the effective tier. Setting `ENABLE_DEFENDER_FOR_AI=false` only stops this template from managing the plan.
 - Delete temporary parity, load, and retirement artifacts only after attaching the approved evidence to the change record.
 - To remove the complete disposable environment, confirm the selected azd environment and evidence retention first, then run `azd down --purge`.
 

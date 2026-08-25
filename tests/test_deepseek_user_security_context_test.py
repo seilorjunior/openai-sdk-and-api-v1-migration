@@ -1,6 +1,8 @@
+import json
 import os
 import unittest
 from argparse import Namespace
+from io import StringIO
 from unittest.mock import Mock, patch
 
 import deepseek_user_security_context_test
@@ -13,15 +15,21 @@ class DeepSeekUserSecurityContextTestTests(unittest.TestCase):
         "deepseek_user_security_context_test.parse_args",
         return_value=Namespace(
             prompt="test",
+            use_synthetic_context=False,
             print_full_exchange=False,
             acknowledge_sensitive_output=False,
             save_full_exchange=None,
         ),
     )
     def test_main_requires_deepseek_base_url(self, _: Mock, base_main: Mock) -> None:
-        with self.assertRaisesRegex(ValueError, "AZURE_OPENAI_DEEPSEEK_BASE_URL is required"):
-            deepseek_user_security_context_test.main()
+        with patch("sys.stdout", new_callable=StringIO) as output:
+            exit_code = deepseek_user_security_context_test.main()
 
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {"status": "failed", "error": "AZURE_OPENAI_DEEPSEEK_BASE_URL is required."},
+        )
         base_main.assert_not_called()
 
     @patch.dict(
@@ -37,6 +45,7 @@ class DeepSeekUserSecurityContextTestTests(unittest.TestCase):
     def test_main_allows_deepseek_deployment_override(self, base_main: Mock) -> None:
         args = Namespace(
             prompt="test",
+            use_synthetic_context=False,
             print_full_exchange=False,
             acknowledge_sensitive_output=False,
             save_full_exchange=None,
