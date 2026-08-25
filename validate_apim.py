@@ -26,7 +26,8 @@ LEGACY_PATTERNS = {
 
 UNIFIED_CHAT_POLICY_MARKERS = (
     "x-api-mode",
-    "string.isnullorempty",
+    "migration-api-mode",
+    "context.variables[",
     "openai-v1-migration",
     "api_mode",
     "request_id",

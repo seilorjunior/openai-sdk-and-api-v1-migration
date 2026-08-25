@@ -83,7 +83,7 @@ The dual policy applies only to the existing chat operation. Other APIM operatio
 
 - Python 3.10 or later (CI validates 3.10-3.13).
 - Authenticated Azure CLI and Azure Developer CLI (`azd`).
-- Permission to create the resources in `infra/` and assign RBAC roles.
+- Permission to create the resources in `infra/`, assign RBAC roles, and update Microsoft Defender for Cloud pricing at subscription scope.
 - For smoke tests: an active deployment, an APIM key, and an Entra identity with access for direct testing.
 - The APIM managed identity must have `Cognitive Services User` on the AI resource.
 - PowerShell 7 for the operational scripts in `scripts/`.
@@ -94,7 +94,7 @@ The dual policy applies only to the existing chat operation. Other APIM operatio
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest --cov --cov-report=term-missing
+python -m pytest --cov --cov-branch --cov-report=term-missing --cov-report=xml --cov-fail-under=65
 python -m ruff check .
 python -m mypy
 python -m pip_audit --no-deps -r requirements.txt
@@ -103,7 +103,9 @@ az bicep lint --file infra/main.bicep
 az bicep lint --file infra/resources.bicep
 ```
 
-The tests, lint, type checks, and Bicep validation are deterministic and require no live Azure credentials. The `Migration validation` GitHub Actions workflow runs pytest with a 60% coverage floor across Python 3.10-3.13, blocking Ruff and mypy checks, and a dependency vulnerability audit in a clean Python 3.13 environment. It also builds and lints Bicep, parses generated and parameter ARM JSON, analyzes every operational PowerShell script with PSScriptAnalyzer, and uploads `migration-scan.sarif`. Dependabot checks pip and GitHub Actions dependencies weekly, while workflow actions are pinned to immutable commit SHAs. `requirements-dev.txt` is optional and only supports local/CI quality checks; it is not required by the command-line tools at runtime. The optional `.pre-commit-config.yaml` runs the same non-mutating Ruff check before commits.
+The deterministic suite covers client construction and normalization, async cancellation and cleanup, capability adapters, thread-local load clients, response comparison, legacy migration findings, retirement evidence, APIM validation, secret redaction, retries, and CLI exit behavior. These tests use mocks at SDK, Azure CLI, and process boundaries and require no live Azure credentials. The coverage command measures branches, prints missing lines, writes `coverage.xml`, and enforces the same 65% floor as CI.
+
+The `Migration validation` GitHub Actions workflow runs the suite across Python 3.10-3.13 with blocking Ruff and mypy checks and audits runtime dependencies in a clean Python 3.13 environment. It also builds and lints Bicep, parses generated and parameter ARM JSON, analyzes every operational PowerShell script with PSScriptAnalyzer, and uploads `migration-scan.sarif`. Dependabot checks pip and GitHub Actions dependencies weekly, while workflow actions are pinned to immutable commit SHAs. `requirements-dev.txt` is optional and only supports local and CI quality checks; the command-line tools do not require it at runtime. The optional `.pre-commit-config.yaml` runs the same non-mutating Ruff check before commits.
 
 ## Scan an application fleet
 
@@ -118,7 +120,7 @@ The scanner reports `azure-ai-inference`, `ChatCompletionsClient`, `/models`, da
 
 ## Provision with Azure Developer CLI
 
-The project includes `azd`-compatible Bicep that creates an isolated environment with Azure OpenAI, a `gpt-4.1-mini` deployment, APIM Developer, a managed identity, Application Insights, Log Analytics, alerts, and RBAC.
+The project includes `azd`-compatible Bicep that creates an isolated environment with Azure OpenAI, a `gpt-4.1-mini` deployment, APIM Developer, a managed identity, Application Insights, Log Analytics, alerts, and RBAC. Microsoft Defender for AI Services and the separate DeepSeek deployment are disabled by default because they introduce subscription-wide billing or consume model quota.
 
 ```powershell
 azd auth login
@@ -128,7 +130,21 @@ azd env set AZURE_LOCATION 'brazilsouth'
 azd env set APIM_LOCATION 'centralus'
 azd env set APIM_PUBLISHER_EMAIL '<publisher-email>'
 azd env set TELEMETRY_READER_PRINCIPAL_ID '<telemetry-reader-object-id>'
+# Explicit opt-in: enables a billable subscription-wide security plan.
+azd env set ENABLE_DEFENDER_FOR_AI true
 azd provision
+```
+
+Defender for AI Services applies to the selected subscription rather than only to this azd resource group. `ENABLE_DEFENDER_FOR_AI=false` leaves the existing subscription configuration unchanged. When explicitly enabled, the `Standard` tier is billable after any applicable trial or promotional period. Confirm the target subscription before provisioning.
+
+Verify the deployed pricing configuration and resource coverage:
+
+```powershell
+$subscriptionId = az account show --query id -o tsv
+$uri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Security/pricings/AI?api-version=2024-01-01"
+az rest --method get --uri $uri `
+  --query "{plan:name,tier:properties.pricingTier,coverage:properties.resourcesCoverageStatus,trial:properties.freeTrialRemainingTime}" `
+  --output table
 ```
 
 `TELEMETRY_READER_PRINCIPAL_ID` is optional. When set, Bicep grants `Monitoring Reader` only on the Application Insights component; access to the Log Analytics workspace is not required. Retrieve the signed-in user's object ID with `az ad signed-in-user show --query id -o tsv`.
@@ -140,17 +156,31 @@ The deployment also accepts these optional `azd` settings; the values shown are 
 | `AZURE_OPENAI_MODEL_NAME` | `gpt-4.1-mini` | Model deployed by Azure OpenAI. |
 | `AZURE_OPENAI_MODEL_VERSION` | `2025-04-14` | Model version. |
 | `AZURE_OPENAI_DEPLOYMENT_SKU` | `GlobalStandard` | Deployment SKU. |
-| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `10` | Deployment capacity. |
+| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `4990` | Point-in-time maximum scale target for the existing `gpt-4.1-mini` Global Standard deployment in Brazil South; recheck capacity before provisioning. |
 | `APIM_SKU_NAME` / `APIM_CAPACITY` | `Developer` / `1` | APIM tier and units. |
 | `APIM_RATE_LIMIT_CALLS_PER_MINUTE` | `60` | Per-subscription or caller-IP requests allowed each minute. |
 | `APIM_BACKEND_RETRY_COUNT` / `APIM_BACKEND_RETRY_INTERVAL_SECONDS` | `2` / `1` | APIM retries and initial interval for backend `5xx` responses only. |
 | `APIM_TELEMETRY_SAMPLING_PERCENTAGE` | `100` | Percentage of APIM request telemetry sent to Application Insights. |
 | `APIM_FAILED_REQUESTS_ALERT_THRESHOLD` | `5` | Failures in five minutes that trigger the alert. |
 | `APIM_ALERT_EMAIL` | publisher email | Alert recipient when different from the APIM publisher. |
+| `ENABLE_DEFENDER_FOR_AI` | `false` | Enables the billable Defender for AI Services `Standard` plan across the subscription. |
+| `ENABLE_DEEPSEEK` | `false` | Creates a separate Foundry account and DeepSeek deployment. |
+| `AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME` | generated | Optional globally unique Foundry account name. |
+| `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT` | `DeepSeek-V4-Flash` | DeepSeek deployment name. |
+| `AZURE_OPENAI_DEEPSEEK_MODEL_NAME` / `AZURE_OPENAI_DEEPSEEK_MODEL_VERSION` | `DeepSeek-V4-Flash` / `2026-04-23` | Catalog model and version; verify regional availability before provisioning. |
+| `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_SKU` / `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_CAPACITY` | `GlobalStandard` / `1` | DeepSeek SKU and quota-consuming capacity. |
 | `ENABLE_PRIVATE_NETWORKING` | `false` | Enables APIM VNet integration and the Azure OpenAI private endpoint. |
 | `APIM_SUBNET_RESOURCE_ID` | empty | Dedicated APIM subnet; required with private networking. |
 | `PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID` | empty | Private endpoint subnet; required with private networking. |
 | `VIRTUAL_NETWORK_RESOURCE_ID` | empty | VNet linked to the Azure OpenAI private DNS zone. |
+
+The `4990` capacity default is the scale target for the existing deployment in this subscription, calculated on August 21, 2026 as its current `10` units plus `4980` additional units reported by the Azure Model Capacities API. Each unit of this `gpt-4.1-mini` Global Standard deployment provides 1,000 TPM and 1 RPM, so the target represents 4.99 million TPM and 4,990 RPM.
+
+Capacity availability changes with subscription quota, regional service capacity, and other deployments. Before provisioning, use the Model Capacities API procedure in `RUNBOOK.md`. When scaling this same deployment, the maximum target is its current capacity plus `availableCapacity`. For a new deployment, the target cannot exceed `availableCapacity`. Set a lower value when the API reports less capacity:
+
+```powershell
+azd env set AZURE_OPENAI_DEPLOYMENT_CAPACITY '<available-capacity>'
+```
 
 APIM provisioning can take several minutes. When it completes, `azd` stores non-secret endpoints and resource names in the environment. Load them into the current session and select the same Azure subscription:
 
@@ -275,6 +305,60 @@ python .\capability_test.py --target direct --capability all
 $env:OPENAI_SAFETY_PROMPT = '<approved-test-prompt>'
 python .\capability_test.py --target apim --capability safety
 ```
+
+To verify the application and end-user context recommended by Microsoft Defender for Cloud, configure synthetic values or a dedicated test account. `OPENAI_SECURITY_END_USER_ID` must be the Microsoft Entra ID user object ID, without a name, email address, or other personal data. Obtain the source IP from a trusted server layer rather than directly trusting a client-controlled header:
+
+```powershell
+$env:OPENAI_SECURITY_APPLICATION_NAME = 'openai-migration-lab'
+$env:OPENAI_SECURITY_END_USER_ID = '<test-entra-user-object-id>'
+$env:OPENAI_SECURITY_END_USER_TENANT_ID = '<entra-tenant-id>'
+$env:OPENAI_SECURITY_SOURCE_IP = '<test-client-ip>'
+
+python .\user_security_context_test.py --target direct
+python .\user_security_context_test.py --target apim
+```
+
+The probe sends `user_security_context` through `extra_body`, requires the application name, user ID, and source IP, and omits those values from its output by default. User and optional tenant IDs must be canonical UUIDs, the source must be a valid IPv4 or IPv6 address, and the application name cannot have surrounding whitespace or control characters. A deployment that rejects the field with `unrecognized_request_argument` is reported as `unsupported` with exit code `2`. An `accepted` result has `validation_level: request` and proves only that the API accepted the exact payload; for APIM it also proves that the policy forwarded the body. It does not prove Defender alert enrichment, which remains `defender_enrichment_verified: false` until a controlled alert is inspected in Defender XDR. `context_source` records whether values came from the environment or explicit synthetic mode.
+
+Official Microsoft documentation:
+
+- [Gain application and end-user context for AI alerts](https://learn.microsoft.com/azure/defender-for-cloud/gain-end-user-context-ai) defines the supported APIs and SDK versions and excludes models consumed through the Azure AI Model Inference API.
+- [Azure OpenAI REST API: Create chat completion](https://learn.microsoft.com/azure/ai-foundry/openai/reference-preview-latest?view=foundry-classic#create-chat-completion) documents `user_security_context` in the Chat Completions request body.
+- [Azure OpenAI API lifecycle](https://learn.microsoft.com/azure/ai-foundry/openai/api-version-lifecycle#changes-between-2024-12-01-preview-and-2024-10-01-preview) records when `user_security_context` was introduced.
+- [Foundry Models sold by Azure](https://learn.microsoft.com/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure) distinguishes Azure OpenAI models from other model collections such as DeepSeek.
+
+For customer troubleshooting, print the complete JSON request and SDK response only with explicit sensitive-output acknowledgement:
+
+```powershell
+python .\user_security_context_test.py --target direct `
+  --print-full-exchange `
+  --acknowledge-sensitive-output
+```
+
+This diagnostic output contains the prompt, application name, user and tenant IDs, source IP, model output, metadata, and token usage. Do not attach it to a ticket or email without reviewing it. The probe does not collect or print HTTP headers, API keys, APIM subscription keys, bearer tokens, or other authentication credentials.
+
+To save the same complete request and response as formatted JSON instead of printing them to the console, use a path in an existing directory:
+
+```powershell
+python .\user_security_context_test.py --target direct `
+  --save-full-exchange .\user-security-context-exchange.json `
+  --acknowledge-sensitive-output
+```
+
+The command writes the file on successful responses and HTTP API errors. The console output includes `full_exchange_file` with the saved path.
+
+For `--target direct`, the probe automatically reads missing `AZURE_OPENAI_BASE_URL` and `AZURE_OPENAI_DEPLOYMENT` values from the current `azd` environment. It never silently invents user context. Use `--use-synthetic-context` explicitly for documented lab values, or set all required `OPENAI_SECURITY_*` variables for environment-derived evidence.
+
+To test the same payload specifically against DeepSeek, use the dedicated runner. It selects the lab deployment `DeepSeek-V4-Flash` by default and saves its exchange separately:
+
+```powershell
+python .\deepseek_user_security_context_test.py `
+  --use-synthetic-context `
+  --save-full-exchange .\deepseek-user-security-context-exchange.json `
+  --acknowledge-sensitive-output
+```
+
+To provision the optional deployment, set `ENABLE_DEEPSEEK=true`, verify regional model availability and quota, and run `azd provision`. azd then exports `AZURE_OPENAI_DEEPSEEK_BASE_URL`, `AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME`, and `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT`. A missing base URL returns sanitized JSON with exit code `1`; `unsupported` with exit code `2` confirms that the request reached the deployment but its API surface rejected `user_security_context`.
 
 The load test allows at most 10,000 requests per mode with concurrency capped at 100. Runs above 1,000 requests per mode require `--confirm-large-load`. Each worker thread builds and reuses one client per API mode instead of creating a new client per request, so measured latency reflects request time rather than repeated client/connection setup. Use `--warmup-requests` (0-100, default 0) to run unmeasured requests first and prime connections/auth tokens before the timed run. Any warmup failure emits only a sanitized exception classification and aborts before measured traffic begins. Reports include percentiles, tokens, `failures_by_type` (exception class), `failures_by_category` (`transport` for connection/timeout failures, `request` for HTTP/configuration failures, `other` otherwise), and cost only when approved rates are supplied:
 

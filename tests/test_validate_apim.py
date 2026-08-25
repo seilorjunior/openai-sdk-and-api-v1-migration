@@ -36,14 +36,16 @@ def snapshot(api_path, backend_url, operation_path, policy):
 
 
 def unified_policy():
-        return """<policies><inbound><choose>
+        return """<policies><inbound>
+    <set-variable name='migration-api-mode' value='X-API-Mode' />
+    <choose>
     <trace source='openai-v1-migration'><metadata name='api_mode' /><metadata name='request_id' /></trace>
-    <when condition='string.IsNullOrEmpty(X-API-Mode) or X-API-Mode v1'>
+    <when condition='context.Variables[ migration-api-mode default-v1 v1'>
             <set-backend-service base-url='https://example.openai.azure.com' />
             <rewrite-uri template='/openai/v1/chat/completions' />
             <authentication-managed-identity resource='https://ai.azure.com' />
         </when>
-        <when condition='X-API-Mode legacy'>
+        <when condition='context.Variables[ migration-api-mode legacy'>
             <set-backend-service base-url='https://example.openai.azure.com' />
             <rewrite-uri template='/openai/deployments/example/chat/completions?api-version=2024-10-21' />
             <authentication-managed-identity resource='https://cognitiveservices.azure.com' />

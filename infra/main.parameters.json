@@ -24,7 +24,7 @@
       "value": "${AZURE_OPENAI_DEPLOYMENT_SKU=GlobalStandard}"
     },
     "modelDeploymentCapacity": {
-      "value": "${AZURE_OPENAI_DEPLOYMENT_CAPACITY=10}"
+      "value": "${AZURE_OPENAI_DEPLOYMENT_CAPACITY=4990}"
     },
     "apimSkuName": {
       "value": "${APIM_SKU_NAME=Developer}"
@@ -64,6 +64,30 @@
     },
     "virtualNetworkResourceId": {
       "value": "${VIRTUAL_NETWORK_RESOURCE_ID=}"
+    },
+    "enableDefenderForAI": {
+      "value": "${ENABLE_DEFENDER_FOR_AI=false}"
+    },
+    "enableDeepSeek": {
+      "value": "${ENABLE_DEEPSEEK=false}"
+    },
+    "deepSeekAccountName": {
+      "value": "${AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME=}"
+    },
+    "deepSeekDeploymentName": {
+      "value": "${AZURE_OPENAI_DEEPSEEK_DEPLOYMENT=DeepSeek-V4-Flash}"
+    },
+    "deepSeekModelName": {
+      "value": "${AZURE_OPENAI_DEEPSEEK_MODEL_NAME=DeepSeek-V4-Flash}"
+    },
+    "deepSeekModelVersion": {
+      "value": "${AZURE_OPENAI_DEEPSEEK_MODEL_VERSION=2026-04-23}"
+    },
+    "deepSeekDeploymentSku": {
+      "value": "${AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_SKU=GlobalStandard}"
+    },
+    "deepSeekDeploymentCapacity": {
+      "value": "${AZURE_OPENAI_DEEPSEEK_DEPLOYMENT_CAPACITY=1}"
     }
   }
 }
