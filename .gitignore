@@ -6,6 +6,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
+coverage.xml
 .mypy_cache/
 .ruff_cache/
 .venv/
@@ -18,6 +19,7 @@ email.txt
 apim-snapshot.json
 *apim-snapshot*.json
 *.load-test-report.json
+*user-security-context-exchange.json
 
 # Local tool logs
 azd-*.log
