@@ -82,6 +82,13 @@ var validatedApimSubnetResourceId = !enablePrivateNetworking || !empty(apimSubne
 var validatedPrivateEndpointSubnetResourceId = !enablePrivateNetworking || !empty(privateEndpointSubnetResourceId) ? privateEndpointSubnetResourceId : fail('privateEndpointSubnetResourceId is required when enablePrivateNetworking is true.')
 var validatedVirtualNetworkResourceId = !enablePrivateNetworking || !empty(virtualNetworkResourceId) ? virtualNetworkResourceId : fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.')
 
+resource defenderForAI 'Microsoft.Security/pricings@2024-01-01' = {
+  name: 'AI'
+  properties: {
+    pricingTier: 'Standard'
+  }
+}
+
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-11-01' = {
   name: resourceGroupName
   location: location

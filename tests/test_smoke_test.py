@@ -129,6 +129,31 @@ class SmokeTestClientTests(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
+            "AZURE_OPENAI_BASE_URL": "https://example.cognitiveservices.azure.com/openai/v1/",
+            "AZURE_OPENAI_TENANT_ID": "33333333-3333-3333-3333-333333333333",
+        },
+        clear=True,
+    )
+    @patch("smoke_test.OpenAI")
+    @patch("smoke_test.get_bearer_token_provider")
+    @patch("smoke_test.AzureCliCredential")
+    def test_direct_client_can_select_azure_cli_tenant(
+        self,
+        credential_type: Mock,
+        get_token_provider: Mock,
+        _: Mock,
+    ) -> None:
+        smoke_test.build_client("direct")
+
+        credential_type.assert_called_once_with(tenant_id="33333333-3333-3333-3333-333333333333")
+        get_token_provider.assert_called_once_with(
+            credential_type.return_value,
+            "https://ai.azure.com/.default",
+        )
+
+    @patch.dict(
+        os.environ,
+        {
             "APIM_OPENAI_BASE_URL": "https://example.azure-api.net/openai/v1/",
             "APIM_SUBSCRIPTION_KEY": "test-key",
         },

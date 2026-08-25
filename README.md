@@ -83,7 +83,7 @@ The dual policy applies only to the existing chat operation. Other APIM operatio
 
 - Python 3.10 or later (CI validates 3.10-3.13).
 - Authenticated Azure CLI and Azure Developer CLI (`azd`).
-- Permission to create the resources in `infra/` and assign RBAC roles.
+- Permission to create the resources in `infra/`, assign RBAC roles, and update Microsoft Defender for Cloud pricing at subscription scope.
 - For smoke tests: an active deployment, an APIM key, and an Entra identity with access for direct testing.
 - The APIM managed identity must have `Cognitive Services User` on the AI resource.
 - PowerShell 7 for the operational scripts in `scripts/`.
@@ -120,7 +120,7 @@ The scanner reports `azure-ai-inference`, `ChatCompletionsClient`, `/models`, da
 
 ## Provision with Azure Developer CLI
 
-The project includes `azd`-compatible Bicep that creates an isolated environment with Azure OpenAI, a `gpt-4.1-mini` deployment, APIM Developer, a managed identity, Application Insights, Log Analytics, alerts, and RBAC.
+The project includes `azd`-compatible Bicep that creates an isolated environment with Azure OpenAI, a `gpt-4.1-mini` deployment, APIM Developer, a managed identity, Application Insights, Log Analytics, alerts, and RBAC. The subscription-scoped entry point also configures the Microsoft Defender for AI Services plan (`Microsoft.Security/pricings/AI`) at the `Standard` tier.
 
 ```powershell
 azd auth login
@@ -131,6 +131,18 @@ azd env set APIM_LOCATION 'centralus'
 azd env set APIM_PUBLISHER_EMAIL '<publisher-email>'
 azd env set TELEMETRY_READER_PRINCIPAL_ID '<telemetry-reader-object-id>'
 azd provision
+```
+
+Defender for AI Services applies to the selected subscription rather than only to this azd resource group. The `Standard` tier is billable after any applicable trial or promotional period. Confirm the target subscription before provisioning. The declaration is idempotent, so later `azd provision` runs keep the plan enabled.
+
+Verify the deployed pricing configuration and resource coverage:
+
+```powershell
+$subscriptionId = az account show --query id -o tsv
+$uri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Security/pricings/AI?api-version=2024-01-01"
+az rest --method get --uri $uri `
+  --query "{plan:name,tier:properties.pricingTier,coverage:properties.resourcesCoverageStatus,trial:properties.freeTrialRemainingTime}" `
+  --output table
 ```
 
 `TELEMETRY_READER_PRINCIPAL_ID` is optional. When set, Bicep grants `Monitoring Reader` only on the Application Insights component; access to the Log Analytics workspace is not required. Retrieve the signed-in user's object ID with `az ad signed-in-user show --query id -o tsv`.
@@ -285,6 +297,59 @@ python .\capability_test.py --target direct --capability all
 $env:OPENAI_SAFETY_PROMPT = '<approved-test-prompt>'
 python .\capability_test.py --target apim --capability safety
 ```
+
+To verify the application and end-user context recommended by Microsoft Defender for Cloud, configure synthetic values or a dedicated test account. `OPENAI_SECURITY_END_USER_ID` must be the Microsoft Entra ID user object ID, without a name, email address, or other personal data. Obtain the source IP from a trusted server layer rather than directly trusting a client-controlled header:
+
+```powershell
+$env:OPENAI_SECURITY_APPLICATION_NAME = 'openai-migration-lab'
+$env:OPENAI_SECURITY_END_USER_ID = '<test-entra-user-object-id>'
+$env:OPENAI_SECURITY_END_USER_TENANT_ID = '<entra-tenant-id>'
+$env:OPENAI_SECURITY_SOURCE_IP = '<test-client-ip>'
+
+python .\user_security_context_test.py --target direct
+python .\user_security_context_test.py --target apim
+```
+
+The probe sends `user_security_context` through `extra_body`, requires the application name, user ID, and source IP, and omits those values from its output by default. The tenant is optional. Microsoft documents this extension for the Azure OpenAI REST API `2025-01-01` and later compatible API surfaces, but not for models consumed through the Azure AI Model Inference API. Run the probe with a direct Azure OpenAI deployment such as the lab's default `gpt-4.1-mini`; a deployment that rejects the field with `unrecognized_request_argument` is reported as `unsupported` with exit code `2`. A `passed` result proves that the API accepted the payload; for the APIM target, it also proves that the policy forwarded the body. The azd Bicep enables threat protection for AI services at subscription scope. To verify alert enrichment, generate a controlled alert in a test environment and inspect its context in Defender XDR. Because the API accepts misspelled field names, the unit tests also assert the exact request shape without relying on a live call.
+
+Official Microsoft documentation:
+
+- [Gain application and end-user context for AI alerts](https://learn.microsoft.com/azure/defender-for-cloud/gain-end-user-context-ai) defines the supported APIs and SDK versions and excludes models consumed through the Azure AI Model Inference API.
+- [Azure OpenAI REST API: Create chat completion](https://learn.microsoft.com/azure/ai-foundry/openai/reference-preview-latest?view=foundry-classic#create-chat-completion) documents `user_security_context` in the Chat Completions request body.
+- [Azure OpenAI API lifecycle](https://learn.microsoft.com/azure/ai-foundry/openai/api-version-lifecycle#changes-between-2024-12-01-preview-and-2024-10-01-preview) records when `user_security_context` was introduced.
+- [Foundry Models sold by Azure](https://learn.microsoft.com/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure) distinguishes Azure OpenAI models from other model collections such as DeepSeek.
+
+For customer troubleshooting, print the complete JSON request and SDK response only with explicit sensitive-output acknowledgement:
+
+```powershell
+python .\user_security_context_test.py --target direct `
+  --print-full-exchange `
+  --acknowledge-sensitive-output
+```
+
+This diagnostic output contains the prompt, application name, user and tenant IDs, source IP, model output, metadata, and token usage. Do not attach it to a ticket or email without reviewing it. The probe does not collect or print HTTP headers, API keys, APIM subscription keys, bearer tokens, or other authentication credentials.
+
+To save the same complete request and response as formatted JSON instead of printing them to the console, use a path in an existing directory:
+
+```powershell
+python .\user_security_context_test.py --target direct `
+  --save-full-exchange .\user-security-context-exchange.json `
+  --acknowledge-sensitive-output
+```
+
+The command writes the file on successful responses and HTTP API errors. The console output includes `full_exchange_file` with the saved path.
+
+For `--target direct`, the probe automatically reads missing `AZURE_OPENAI_BASE_URL` and `AZURE_OPENAI_DEPLOYMENT` values from the current `azd` environment. It also supplies synthetic lab defaults for the four `OPENAI_SECURITY_*` values. Set those environment variables before running when customer-specific identity, tenant, application, or source-IP values are required.
+
+To test the same payload specifically against DeepSeek, use the dedicated runner. It selects the lab deployment `DeepSeek-V4-Flash` by default and saves its exchange separately:
+
+```powershell
+python .\deepseek_user_security_context_test.py `
+  --save-full-exchange .\deepseek-user-security-context-exchange.json `
+  --acknowledge-sensitive-output
+```
+
+Set `AZURE_OPENAI_DEEPSEEK_DEPLOYMENT` to override the DeepSeek deployment name. A result of `unsupported` with exit code `2` confirms that the request reached the deployment but that its API surface rejected `user_security_context`.
 
 The load test allows at most 10,000 requests per mode with concurrency capped at 100. Runs above 1,000 requests per mode require `--confirm-large-load`. Each worker thread builds and reuses one client per API mode instead of creating a new client per request, so measured latency reflects request time rather than repeated client/connection setup. Use `--warmup-requests` (0-100, default 0) to run unmeasured requests first and prime connections/auth tokens before the timed run. Any warmup failure emits only a sanitized exception classification and aborts before measured traffic begins. Reports include percentiles, tokens, `failures_by_type` (exception class), `failures_by_category` (`transport` for connection/timeout failures, `request` for HTTP/configuration failures, `other` otherwise), and cost only when approved rates are supplied:
 

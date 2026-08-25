@@ -19,6 +19,7 @@ email.txt
 apim-snapshot.json
 *apim-snapshot*.json
 *.load-test-report.json
+*user-security-context-exchange.json
 
 # Local tool logs
 azd-*.log

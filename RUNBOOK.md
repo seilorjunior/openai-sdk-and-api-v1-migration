@@ -114,6 +114,26 @@ $capacity.value |
 
 The Developer APIM SKU has no production SLA. Select a production SKU and capacity before serving customer traffic.
 
+## Defender for AI Services verification
+
+The subscription-scoped Bicep entry point keeps the Microsoft Defender for AI Services `AI` plan at the billable `Standard` tier. Before running `azd provision`, verify that the selected subscription is the intended billing and security boundary:
+
+```powershell
+$subscriptionId = az account show --query id -o tsv
+azd env get-value AZURE_SUBSCRIPTION_ID
+```
+
+After provisioning, verify the effective plan and coverage:
+
+```powershell
+$uri = "https://management.azure.com/subscriptions/$subscriptionId/providers/Microsoft.Security/pricings/AI?api-version=2024-01-01"
+az rest --method get --uri $uri `
+  --query "{plan:name,tier:properties.pricingTier,coverage:properties.resourcesCoverageStatus,trial:properties.freeTrialRemainingTime}" `
+  --output table
+```
+
+Expect `plan` to be `AI` and `tier` to be `Standard`. Investigate incomplete coverage before relying on `user_security_context` for Defender alert enrichment. Treat plan disablement as a security and billing change that requires explicit approval.
+
 ## Private-network troubleshooting
 
 When `ENABLE_PRIVATE_NETWORKING=true`, all three resource IDs are mandatory: `APIM_SUBNET_RESOURCE_ID`, `PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID`, and `VIRTUAL_NETWORK_RESOURCE_ID`. Bicep stops with a named validation error when any value is blank.
