@@ -24,7 +24,7 @@
       "value": "${AZURE_OPENAI_DEPLOYMENT_SKU=GlobalStandard}"
     },
     "modelDeploymentCapacity": {
-      "value": "${AZURE_OPENAI_DEPLOYMENT_CAPACITY=4990}"
+      "value": "${AZURE_OPENAI_DEPLOYMENT_CAPACITY=10}"
     },
     "apimSkuName": {
       "value": "${APIM_SKU_NAME=Developer}"
@@ -52,6 +52,12 @@
     },
     "telemetryReaderPrincipalId": {
       "value": "${TELEMETRY_READER_PRINCIPAL_ID=}"
+    },
+    "mcpBackendKey": {
+      "value": "${MCP_BACKEND_KEY}"
+    },
+    "mcpAppServicePlanSku": {
+      "value": "${MCP_APP_SERVICE_PLAN_SKU=B1}"
     },
     "enablePrivateNetworking": {
       "value": "${ENABLE_PRIVATE_NETWORKING=false}"

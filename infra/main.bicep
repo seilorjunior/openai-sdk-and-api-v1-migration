@@ -26,8 +26,8 @@ param modelVersion string = '2025-04-14'
 param modelDeploymentSku string = 'GlobalStandard'
 
 @minValue(1)
-@description('Azure OpenAI deployment capacity. The default uses the maximum currently available gpt-4.1-mini GlobalStandard quota for this subscription in Brazil South.')
-param modelDeploymentCapacity int = 4990
+@description('Azure OpenAI deployment capacity.')
+param modelDeploymentCapacity int = 10
 
 @description('API Management SKU.')
 param apimSkuName string = 'Developer'
@@ -62,6 +62,14 @@ param alertEmail string = ''
 
 @description('Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment.')
 param telemetryReaderPrincipalId string = ''
+
+@secure()
+@minLength(32)
+@description('Shared secret injected by APIM when it calls the migration MCP backend.')
+param mcpBackendKey string
+
+@description('App Service plan SKU for the migration MCP backend.')
+param mcpAppServicePlanSku string = 'B1'
 
 @description('Deploy APIM into a VNet and disable public access to Azure OpenAI.')
 param enablePrivateNetworking bool = false
@@ -146,6 +154,8 @@ module resources 'resources.bicep' = {
     alertEmail: empty(alertEmail) ? publisherEmail : alertEmail
     resourceToken: resourceToken
     telemetryReaderPrincipalId: telemetryReaderPrincipalId
+    mcpBackendKey: mcpBackendKey
+    mcpAppServicePlanSku: mcpAppServicePlanSku
     enablePrivateNetworking: enablePrivateNetworking
     apimSubnetResourceId: validatedApimSubnetResourceId
     privateEndpointSubnetResourceId: validatedPrivateEndpointSubnetResourceId
@@ -177,6 +187,8 @@ output APIM_SERVICE_NAME string = resources.outputs.apimServiceName
 output APIM_API_ID string = resources.outputs.apimApiId
 output APIM_OPENAI_BASE_URL string = resources.outputs.apimOpenAIBaseUrl
 output APIM_SUBSCRIPTION_ID string = resources.outputs.apimSubscriptionId
+output MCP_APP_SERVICE_NAME string = resources.outputs.mcpAppServiceName
+output MCP_APIM_URL string = resources.outputs.mcpApimUrl
 output APPLICATION_INSIGHTS_NAME string = resources.outputs.applicationInsightsName
 output LOG_ANALYTICS_WORKSPACE_NAME string = resources.outputs.logAnalyticsWorkspaceName
 output DEFENDER_FOR_AI_ENABLED bool = enableDefenderForAI

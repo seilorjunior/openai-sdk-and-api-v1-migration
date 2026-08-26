@@ -55,6 +55,14 @@ param alertEmail string
 @description('Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment.')
 param telemetryReaderPrincipalId string = ''
 
+@secure()
+@minLength(32)
+@description('Shared secret injected by APIM when it calls the migration MCP backend.')
+param mcpBackendKey string
+
+@description('App Service plan SKU for the migration MCP backend.')
+param mcpAppServicePlanSku string = 'B1'
+
 @description('Deploy APIM into a VNet and disable public access to Azure OpenAI.')
 param enablePrivateNetworking bool = false
 
@@ -74,6 +82,9 @@ var apimServiceName = 'azapi${apimResourceToken}'
 var apimApiId = 'azoa${resourceToken}'
 var logAnalyticsName = 'azlog${resourceToken}'
 var applicationInsightsName = 'azins${resourceToken}'
+var mcpAppServicePlanName = 'mcpasp${resourceToken}'
+var mcpAppServiceName = 'mcpapp${resourceToken}'
+var mcpApiId = 'migration-mcp-${take(resourceToken, 12)}'
 var privateEndpointName = 'azpe${resourceToken}'
 var apimProductId = 'migration-${take(resourceToken, 12)}'
 var apimSubscriptionId = 'migration-${take(resourceToken, 12)}'
@@ -249,6 +260,85 @@ resource applicationInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
+resource mcpAppServicePlan 'Microsoft.Web/serverfarms@2024-11-01' = {
+  name: mcpAppServicePlanName
+  location: location
+  kind: 'linux'
+  sku: {
+    name: mcpAppServicePlanSku
+    capacity: 1
+  }
+  properties: {
+    reserved: true
+  }
+}
+
+resource mcpAppService 'Microsoft.Web/sites@2024-11-01' = {
+  name: mcpAppServiceName
+  location: location
+  kind: 'app,linux'
+  tags: {
+    'azd-service-name': 'migration-mcp'
+  }
+  properties: {
+    clientAffinityEnabled: false
+    httpsOnly: true
+    serverFarmId: mcpAppServicePlan.id
+    siteConfig: {
+      alwaysOn: true
+      appCommandLine: 'python -m uvicorn services.migration_mcp.app:app --host 0.0.0.0 --port 8000'
+      cors: {
+        allowedOrigins: [
+          apim.properties.gatewayUrl
+        ]
+        supportCredentials: false
+      }
+      ftpsState: 'Disabled'
+      http20Enabled: true
+      linuxFxVersion: 'PYTHON|3.13'
+      minTlsVersion: '1.2'
+      appSettings: [
+        {
+          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+          value: 'true'
+        }
+        {
+          name: 'MCP_BACKEND_KEY'
+          value: mcpBackendKey
+        }
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: applicationInsights.properties.ConnectionString
+        }
+        {
+          name: 'ApplicationInsightsAgent_EXTENSION_VERSION'
+          value: '~3'
+        }
+      ]
+    }
+  }
+}
+
+resource mcpAppServiceDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+  name: 'send-to-log-analytics'
+  scope: mcpAppService
+  properties: {
+    workspaceId: logAnalytics.id
+    logs: [
+      {
+        categoryGroup: 'allLogs'
+        enabled: true
+      }
+    ]
+    metrics: [
+      {
+        category: 'AllMetrics'
+        enabled: true
+      }
+    ]
+  }
+}
+
 resource telemetryMonitoringReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(telemetryReaderPrincipalId)) {
   name: guid(applicationInsights.id, telemetryReaderPrincipalId, monitoringReaderRoleId)
   scope: applicationInsights
@@ -275,6 +365,7 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
   properties: {
     publisherEmail: publisherEmail
     publisherName: publisherName
+    legacyPortalStatus: 'Disabled'
     publicNetworkAccess: 'Enabled'
     virtualNetworkType: enablePrivateNetworking ? 'External' : 'None'
     ...(enablePrivateNetworking ? {
@@ -283,6 +374,12 @@ resource apim 'Microsoft.ApiManagement/service@2024-05-01' = {
       }
     } : {})
     customProperties: {
+      'Microsoft.WindowsAzure.ApiManagement.Gateway.Protocols.Server.Http2': 'False'
+      'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Ssl30': 'False'
+      'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls10': 'False'
+      'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls11': 'False'
+      'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Ciphers.TripleDes168': 'False'
+      'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Ssl30': 'False'
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10': 'False'
       'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls11': 'False'
     }
@@ -338,6 +435,100 @@ resource openAIAPI 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
     ]
     serviceUrl: azureOpenAI.properties.endpoint
     subscriptionRequired: true
+  }
+}
+
+resource mcpBackendNamedValue 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
+  parent: apim
+  name: 'migration-mcp-backend-key'
+  properties: {
+    displayName: 'migration-mcp-backend-key'
+    secret: true
+    value: mcpBackendKey
+  }
+}
+
+resource migrationMcpAPI 'Microsoft.ApiManagement/service/apis@2025-09-01-preview' = {
+  parent: apim
+  name: mcpApiId
+  properties: {
+    apiType: 'mcp'
+    displayName: 'OpenAI Migration Toolkit MCP'
+    // Central US Developer/STV2 currently rejects the documented endpoint array and drops transportType on GET.
+    // Keep this dictionary workaround until an isolated API accepts and retains the official preview contract.
+    mcpProperties: {
+      endpoints: {
+        message: {
+          name: 'message'
+          uriTemplate: '/mcp'
+        }
+      }
+      transportType: 'streamable'
+    }
+    path: 'migration-mcp'
+    protocols: [
+      'https'
+    ]
+    serviceUrl: 'https://${mcpAppService.properties.defaultHostName}'
+    subscriptionRequired: true
+    type: 'mcp'
+  }
+}
+
+resource migrationMcpPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
+  parent: migrationMcpAPI
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: '<policies><inbound><base /><rate-limit-by-key calls="${rateLimitCallsPerMinute}" renewal-period="60" counter-key="@(context.Subscription.Id)" /><set-header name="x-mcp-backend-key" exists-action="override"><value>{{migration-mcp-backend-key}}</value></set-header></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
+  }
+  dependsOn: [
+    mcpBackendNamedValue
+  ]
+}
+
+resource migrationMcpDiagnostic 'Microsoft.ApiManagement/service/apis/diagnostics@2024-05-01' = {
+  parent: migrationMcpAPI
+  name: 'applicationinsights'
+  properties: {
+    alwaysLog: 'allErrors'
+    backend: {
+      request: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+      response: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+    }
+    frontend: {
+      request: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+      response: {
+        body: {
+          bytes: 0
+        }
+        headers: []
+      }
+    }
+    httpCorrelationProtocol: 'W3C'
+    logClientIp: false
+    loggerId: apimApplicationInsightsLogger.id
+    metrics: true
+    sampling: {
+      samplingType: 'fixed'
+      percentage: telemetrySamplingPercentage
+    }
+    verbosity: 'information'
   }
 }
 
@@ -476,6 +667,11 @@ resource migrationProductApi 'Microsoft.ApiManagement/service/products/apis@2024
   name: openAIAPI.name
 }
 
+resource migrationProductMcpApi 'Microsoft.ApiManagement/service/products/apis@2024-05-01' = {
+  parent: migrationProduct
+  name: migrationMcpAPI.name
+}
+
 resource migrationSubscription 'Microsoft.ApiManagement/service/subscriptions@2024-05-01' = {
   parent: apim
   name: apimSubscriptionId
@@ -564,5 +760,7 @@ output apimServiceName string = apim.name
 output apimApiId string = openAIAPI.name
 output apimOpenAIBaseUrl string = '${apim.properties.gatewayUrl}/openai/v1/'
 output apimSubscriptionId string = migrationSubscription.name
+output mcpAppServiceName string = mcpAppService.name
+output mcpApimUrl string = '${apim.properties.gatewayUrl}/migration-mcp/mcp'
 output applicationInsightsName string = applicationInsights.name
 output logAnalyticsWorkspaceName string = logAnalytics.name

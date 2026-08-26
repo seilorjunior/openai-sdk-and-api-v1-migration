@@ -88,15 +88,19 @@ def iter_files(root: Path, ignored_names: set[str]) -> Iterable[Path]:
 
 def scan_file(path: Path, display_root: Path) -> list[Finding]:
     try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        source = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeError):
         return []
-    findings = []
     try:
         display_path = path.relative_to(display_root).as_posix()
     except ValueError:
         display_path = path.as_posix()
-    for line_number, line in enumerate(lines, start=1):
+    return scan_text(source, display_path)
+
+
+def scan_text(source: str, display_path: str) -> list[Finding]:
+    findings = []
+    for line_number, line in enumerate(source.splitlines(), start=1):
         for rule_id, message, pattern in RULES:
             for match in pattern.finditer(line):
                 findings.append(

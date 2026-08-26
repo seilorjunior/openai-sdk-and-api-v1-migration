@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "14019302628926403426"
+      "templateHash": "4852350117935581639"
     }
   },
   "parameters": {
@@ -65,10 +65,10 @@
     },
     "modelDeploymentCapacity": {
       "type": "int",
-      "defaultValue": 4990,
+      "defaultValue": 10,
       "minValue": 1,
       "metadata": {
-        "description": "Azure OpenAI deployment capacity. The default uses the maximum currently available gpt-4.1-mini GlobalStandard quota for this subscription in Brazil South."
+        "description": "Azure OpenAI deployment capacity."
       }
     },
     "apimSkuName": {
@@ -141,6 +141,20 @@
         "description": "Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment."
       }
     },
+    "mcpBackendKey": {
+      "type": "securestring",
+      "minLength": 32,
+      "metadata": {
+        "description": "Shared secret injected by APIM when it calls the migration MCP backend."
+      }
+    },
+    "mcpAppServicePlanSku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "metadata": {
+        "description": "App Service plan SKU for the migration MCP backend."
+      }
+    },
     "enablePrivateNetworking": {
       "type": "bool",
       "defaultValue": false,
@@ -168,6 +182,63 @@
       "metadata": {
         "description": "Resource ID of the VNet linked to privatelink.openai.azure.com. Required when private networking is enabled."
       }
+    },
+    "enableDefenderForAI": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable the subscription-wide, billable Microsoft Defender for AI Services plan."
+      }
+    },
+    "enableDeepSeek": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy an optional Microsoft Foundry account and DeepSeek model deployment."
+      }
+    },
+    "deepSeekAccountName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Globally unique Microsoft Foundry account name for DeepSeek. Leave empty to generate one."
+      }
+    },
+    "deepSeekDeploymentName": {
+      "type": "string",
+      "defaultValue": "DeepSeek-V4-Flash",
+      "metadata": {
+        "description": "DeepSeek deployment name exposed to API clients."
+      }
+    },
+    "deepSeekModelName": {
+      "type": "string",
+      "defaultValue": "DeepSeek-V4-Flash",
+      "metadata": {
+        "description": "DeepSeek model name from the regional model catalog."
+      }
+    },
+    "deepSeekModelVersion": {
+      "type": "string",
+      "defaultValue": "2026-04-23",
+      "metadata": {
+        "description": "DeepSeek model version from the regional model catalog."
+      }
+    },
+    "deepSeekDeploymentSku": {
+      "type": "string",
+      "defaultValue": "GlobalStandard",
+      "metadata": {
+        "description": "DeepSeek deployment SKU."
+      }
+    },
+    "deepSeekDeploymentCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "metadata": {
+        "description": "DeepSeek deployment capacity in quota units."
+      }
     }
   },
   "variables": {
@@ -176,9 +247,19 @@
     "apimResourceToken": "[uniqueString(subscription().id, parameters('apimLocation'), parameters('environmentName'))]",
     "validatedApimSubnetResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('apimSubnetResourceId')))), parameters('apimSubnetResourceId'), fail('apimSubnetResourceId is required when enablePrivateNetworking is true.'))]",
     "validatedPrivateEndpointSubnetResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('privateEndpointSubnetResourceId')))), parameters('privateEndpointSubnetResourceId'), fail('privateEndpointSubnetResourceId is required when enablePrivateNetworking is true.'))]",
-    "validatedVirtualNetworkResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('virtualNetworkResourceId')))), parameters('virtualNetworkResourceId'), fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.'))]"
+    "validatedVirtualNetworkResourceId": "[if(or(not(parameters('enablePrivateNetworking')), not(empty(parameters('virtualNetworkResourceId')))), parameters('virtualNetworkResourceId'), fail('virtualNetworkResourceId is required when enablePrivateNetworking is true.'))]",
+    "resolvedDeepSeekAccountName": "[if(empty(parameters('deepSeekAccountName')), format('aif-{0}', variables('resourceToken')), parameters('deepSeekAccountName'))]"
   },
   "resources": [
+    {
+      "condition": "[parameters('enableDefenderForAI')]",
+      "type": "Microsoft.Security/pricings",
+      "apiVersion": "2024-01-01",
+      "name": "AI",
+      "properties": {
+        "pricingTier": "Standard"
+      }
+    },
     {
       "type": "Microsoft.Resources/resourceGroups",
       "apiVersion": "2024-11-01",
@@ -254,6 +335,12 @@
           "telemetryReaderPrincipalId": {
             "value": "[parameters('telemetryReaderPrincipalId')]"
           },
+          "mcpBackendKey": {
+            "value": "[parameters('mcpBackendKey')]"
+          },
+          "mcpAppServicePlanSku": {
+            "value": "[parameters('mcpAppServicePlanSku')]"
+          },
           "enablePrivateNetworking": {
             "value": "[parameters('enablePrivateNetworking')]"
           },
@@ -274,7 +361,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.41.2.15936",
-              "templateHash": "10203099756881785506"
+              "templateHash": "462432846696894671"
             }
           },
           "parameters": {
@@ -393,6 +480,20 @@
                 "description": "Microsoft Entra object ID granted Monitoring Reader on Application Insights. Leave empty to skip the assignment."
               }
             },
+            "mcpBackendKey": {
+              "type": "securestring",
+              "minLength": 32,
+              "metadata": {
+                "description": "Shared secret injected by APIM when it calls the migration MCP backend."
+              }
+            },
+            "mcpAppServicePlanSku": {
+              "type": "string",
+              "defaultValue": "B1",
+              "metadata": {
+                "description": "App Service plan SKU for the migration MCP backend."
+              }
+            },
             "enablePrivateNetworking": {
               "type": "bool",
               "defaultValue": false,
@@ -432,6 +533,9 @@
             "apimApiId": "[format('azoa{0}', parameters('resourceToken'))]",
             "logAnalyticsName": "[format('azlog{0}', parameters('resourceToken'))]",
             "applicationInsightsName": "[format('azins{0}', parameters('resourceToken'))]",
+            "mcpAppServicePlanName": "[format('mcpasp{0}', parameters('resourceToken'))]",
+            "mcpAppServiceName": "[format('mcpapp{0}', parameters('resourceToken'))]",
+            "mcpApiId": "[format('migration-mcp-{0}', take(parameters('resourceToken'), 12))]",
             "privateEndpointName": "[format('azpe{0}', parameters('resourceToken'))]",
             "apimProductId": "[format('migration-{0}', take(parameters('resourceToken'), 12))]",
             "apimSubscriptionId": "[format('migration-{0}', take(parameters('resourceToken'), 12))]",
@@ -626,6 +730,97 @@
               ]
             },
             {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2024-11-01",
+              "name": "[variables('mcpAppServicePlanName')]",
+              "location": "[parameters('location')]",
+              "kind": "linux",
+              "sku": {
+                "name": "[parameters('mcpAppServicePlanSku')]",
+                "capacity": 1
+              },
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2024-11-01",
+              "name": "[variables('mcpAppServiceName')]",
+              "location": "[parameters('location')]",
+              "kind": "app,linux",
+              "tags": {
+                "azd-service-name": "migration-mcp"
+              },
+              "properties": {
+                "clientAffinityEnabled": false,
+                "httpsOnly": true,
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('mcpAppServicePlanName'))]",
+                "siteConfig": {
+                  "alwaysOn": true,
+                  "appCommandLine": "python -m uvicorn services.migration_mcp.app:app --host 0.0.0.0 --port 8000",
+                  "cors": {
+                    "allowedOrigins": [
+                      "[reference(resourceId('Microsoft.ApiManagement/service', variables('apimServiceName')), '2024-05-01').gatewayUrl]"
+                    ],
+                    "supportCredentials": false
+                  },
+                  "ftpsState": "Disabled",
+                  "http20Enabled": true,
+                  "linuxFxVersion": "PYTHON|3.13",
+                  "minTlsVersion": "1.2",
+                  "appSettings": [
+                    {
+                      "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+                      "value": "true"
+                    },
+                    {
+                      "name": "MCP_BACKEND_KEY",
+                      "value": "[parameters('mcpBackendKey')]"
+                    },
+                    {
+                      "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                      "value": "[reference(resourceId('Microsoft.Insights/components', variables('applicationInsightsName')), '2020-02-02').ConnectionString]"
+                    },
+                    {
+                      "name": "ApplicationInsightsAgent_EXTENSION_VERSION",
+                      "value": "~3"
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
+                "[resourceId('Microsoft.Insights/components', variables('applicationInsightsName'))]",
+                "[resourceId('Microsoft.Web/serverfarms', variables('mcpAppServicePlanName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.Web/sites', variables('mcpAppServiceName'))]",
+              "name": "send-to-log-analytics",
+              "properties": {
+                "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+                "logs": [
+                  {
+                    "categoryGroup": "allLogs",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+                "[resourceId('Microsoft.Web/sites', variables('mcpAppServiceName'))]"
+              ]
+            },
+            {
               "condition": "[not(empty(parameters('telemetryReaderPrincipalId')))]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
@@ -655,7 +850,7 @@
                   "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')))]": {}
                 }
               },
-              "properties": "[shallowMerge(createArray(createObject('publisherEmail', parameters('publisherEmail'), 'publisherName', parameters('publisherName'), 'publicNetworkAccess', 'Enabled', 'virtualNetworkType', if(parameters('enablePrivateNetworking'), 'External', 'None')), if(parameters('enablePrivateNetworking'), createObject('virtualNetworkConfiguration', createObject('subnetResourceId', variables('validatedApimSubnetResourceId'))), createObject()), createObject('customProperties', createObject('Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls11', 'False'))))]",
+              "properties": "[shallowMerge(createArray(createObject('publisherEmail', parameters('publisherEmail'), 'publisherName', parameters('publisherName'), 'legacyPortalStatus', 'Disabled', 'publicNetworkAccess', 'Enabled', 'virtualNetworkType', if(parameters('enablePrivateNetworking'), 'External', 'None')), if(parameters('enablePrivateNetworking'), createObject('virtualNetworkConfiguration', createObject('subnetResourceId', variables('validatedApimSubnetResourceId'))), createObject()), createObject('customProperties', createObject('Microsoft.WindowsAzure.ApiManagement.Gateway.Protocols.Server.Http2', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Ssl30', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls10', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Backend.Protocols.Tls11', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Ciphers.TripleDes168', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Ssl30', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls10', 'False', 'Microsoft.WindowsAzure.ApiManagement.Gateway.Security.Protocols.Tls11', 'False'))))]",
               "dependsOn": [
                 "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]"
               ]
@@ -727,6 +922,110 @@
               "dependsOn": [
                 "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
                 "[resourceId('Microsoft.CognitiveServices/accounts', variables('azureOpenAIAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/namedValues",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}', variables('apimServiceName'), 'migration-mcp-backend-key')]",
+              "properties": {
+                "displayName": "migration-mcp-backend-key",
+                "secret": true,
+                "value": "[parameters('mcpBackendKey')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis",
+              "apiVersion": "2025-09-01-preview",
+              "name": "[format('{0}/{1}', variables('apimServiceName'), variables('mcpApiId'))]",
+              "properties": {
+                "apiType": "mcp",
+                "displayName": "OpenAI Migration Toolkit MCP",
+                "mcpProperties": {
+                  "endpoints": {
+                    "message": {
+                      "name": "message",
+                      "uriTemplate": "/mcp"
+                    }
+                  },
+                  "transportType": "streamable"
+                },
+                "path": "migration-mcp",
+                "protocols": [
+                  "https"
+                ],
+                "serviceUrl": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', variables('mcpAppServiceName')), '2024-11-01').defaultHostName)]",
+                "subscriptionRequired": true,
+                "type": "mcp"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service', variables('apimServiceName'))]",
+                "[resourceId('Microsoft.Web/sites', variables('mcpAppServiceName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis/policies",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('apimServiceName'), variables('mcpApiId'), 'policy')]",
+              "properties": {
+                "format": "rawxml",
+                "value": "[format('<policies><inbound><base /><rate-limit-by-key calls=\"{0}\" renewal-period=\"60\" counter-key=\"@(context.Subscription.Id)\" /><set-header name=\"x-mcp-backend-key\" exists-action=\"override\"><value>{{{{migration-mcp-backend-key}}}}</value></set-header></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>', parameters('rateLimitCallsPerMinute'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/namedValues', variables('apimServiceName'), 'migration-mcp-backend-key')]",
+                "[resourceId('Microsoft.ApiManagement/service/apis', variables('apimServiceName'), variables('mcpApiId'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/apis/diagnostics",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('apimServiceName'), variables('mcpApiId'), 'applicationinsights')]",
+              "properties": {
+                "alwaysLog": "allErrors",
+                "backend": {
+                  "request": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  },
+                  "response": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  }
+                },
+                "frontend": {
+                  "request": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  },
+                  "response": {
+                    "body": {
+                      "bytes": 0
+                    },
+                    "headers": []
+                  }
+                },
+                "httpCorrelationProtocol": "W3C",
+                "logClientIp": false,
+                "loggerId": "[resourceId('Microsoft.ApiManagement/service/loggers', variables('apimServiceName'), 'migration-application-insights')]",
+                "metrics": true,
+                "sampling": {
+                  "samplingType": "fixed",
+                  "percentage": "[parameters('telemetrySamplingPercentage')]"
+                },
+                "verbosity": "information"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/loggers', variables('apimServiceName'), 'migration-application-insights')]",
+                "[resourceId('Microsoft.ApiManagement/service/apis', variables('apimServiceName'), variables('mcpApiId'))]"
               ]
             },
             {
@@ -838,6 +1137,15 @@
               "dependsOn": [
                 "[resourceId('Microsoft.ApiManagement/service/products', variables('apimServiceName'), variables('apimProductId'))]",
                 "[resourceId('Microsoft.ApiManagement/service/apis', variables('apimServiceName'), variables('apimApiId'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.ApiManagement/service/products/apis",
+              "apiVersion": "2024-05-01",
+              "name": "[format('{0}/{1}/{2}', variables('apimServiceName'), variables('apimProductId'), variables('mcpApiId'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.ApiManagement/service/apis', variables('apimServiceName'), variables('mcpApiId'))]",
+                "[resourceId('Microsoft.ApiManagement/service/products', variables('apimServiceName'), variables('apimProductId'))]"
               ]
             },
             {
@@ -966,6 +1274,14 @@
               "type": "string",
               "value": "[variables('apimSubscriptionId')]"
             },
+            "mcpAppServiceName": {
+              "type": "string",
+              "value": "[variables('mcpAppServiceName')]"
+            },
+            "mcpApimUrl": {
+              "type": "string",
+              "value": "[format('{0}/migration-mcp/mcp', reference(resourceId('Microsoft.ApiManagement/service', variables('apimServiceName')), '2024-05-01').gatewayUrl)]"
+            },
             "applicationInsightsName": {
               "type": "string",
               "value": "[variables('applicationInsightsName')]"
@@ -973,6 +1289,174 @@
             "logAnalyticsWorkspaceName": {
               "type": "string",
               "value": "[variables('logAnalyticsName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('resourceGroupName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDeepSeek')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('deepseek-{0}', variables('resourceToken'))]",
+      "resourceGroup": "[variables('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "accountName": {
+            "value": "[variables('resolvedDeepSeekAccountName')]"
+          },
+          "deploymentName": {
+            "value": "[parameters('deepSeekDeploymentName')]"
+          },
+          "modelName": {
+            "value": "[parameters('deepSeekModelName')]"
+          },
+          "modelVersion": {
+            "value": "[parameters('deepSeekModelVersion')]"
+          },
+          "skuName": {
+            "value": "[parameters('deepSeekDeploymentSku')]"
+          },
+          "capacity": {
+            "value": "[parameters('deepSeekDeploymentCapacity')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.41.2.15936",
+              "templateHash": "14757832709766221175"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "defaultValue": "[resourceGroup().location]",
+              "metadata": {
+                "description": "Azure region for the Microsoft Foundry account."
+              }
+            },
+            "accountName": {
+              "type": "string",
+              "metadata": {
+                "description": "Globally unique name for the Microsoft Foundry account."
+              }
+            },
+            "deploymentName": {
+              "type": "string",
+              "defaultValue": "DeepSeek-V4-Flash",
+              "metadata": {
+                "description": "Deployment name exposed to API clients."
+              }
+            },
+            "modelName": {
+              "type": "string",
+              "defaultValue": "DeepSeek-V4-Flash",
+              "metadata": {
+                "description": "DeepSeek model name from the regional model catalog."
+              }
+            },
+            "modelVersion": {
+              "type": "string",
+              "defaultValue": "2026-04-23",
+              "metadata": {
+                "description": "DeepSeek model version from the regional model catalog."
+              }
+            },
+            "skuName": {
+              "type": "string",
+              "defaultValue": "GlobalStandard",
+              "metadata": {
+                "description": "Azure OpenAI deployment SKU."
+              }
+            },
+            "capacity": {
+              "type": "int",
+              "defaultValue": 1,
+              "minValue": 1,
+              "metadata": {
+                "description": "Deployment capacity in quota units."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.CognitiveServices/accounts",
+              "apiVersion": "2025-06-01",
+              "name": "[parameters('accountName')]",
+              "location": "[parameters('location')]",
+              "kind": "AIServices",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "sku": {
+                "name": "S0"
+              },
+              "properties": {
+                "allowProjectManagement": true,
+                "customSubDomainName": "[parameters('accountName')]",
+                "disableLocalAuth": true,
+                "publicNetworkAccess": "Enabled",
+                "networkAcls": {
+                  "defaultAction": "Allow"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.CognitiveServices/accounts/deployments",
+              "apiVersion": "2025-06-01",
+              "name": "[format('{0}/{1}', parameters('accountName'), parameters('deploymentName'))]",
+              "sku": {
+                "name": "[parameters('skuName')]",
+                "capacity": "[parameters('capacity')]"
+              },
+              "properties": {
+                "model": {
+                  "format": "DeepSeek",
+                  "name": "[parameters('modelName')]",
+                  "version": "[parameters('modelVersion')]"
+                },
+                "raiPolicyName": "Microsoft.DefaultV2",
+                "versionUpgradeOption": "NoAutoUpgrade"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "deploymentResourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.CognitiveServices/accounts/deployments', parameters('accountName'), parameters('deploymentName'))]"
+            },
+            "foundryAccountEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName')), '2025-06-01').endpoint]"
+            },
+            "foundryAccountName": {
+              "type": "string",
+              "value": "[parameters('accountName')]"
+            },
+            "foundryAccountOpenAIBaseUrl": {
+              "type": "string",
+              "value": "[format('{0}openai/v1', reference(resourceId('Microsoft.CognitiveServices/accounts', parameters('accountName')), '2025-06-01').endpoint)]"
+            },
+            "deploymentName": {
+              "type": "string",
+              "value": "[parameters('deploymentName')]"
             }
           }
         }
@@ -1023,6 +1507,14 @@
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.apimSubscriptionId.value]"
     },
+    "MCP_APP_SERVICE_NAME": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.mcpAppServiceName.value]"
+    },
+    "MCP_APIM_URL": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.mcpApimUrl.value]"
+    },
     "APPLICATION_INSIGHTS_NAME": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.applicationInsightsName.value]"
@@ -1030,6 +1522,26 @@
     "LOG_ANALYTICS_WORKSPACE_NAME": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('resources-{0}', variables('resourceToken'))), '2025-04-01').outputs.logAnalyticsWorkspaceName.value]"
+    },
+    "DEFENDER_FOR_AI_ENABLED": {
+      "type": "bool",
+      "value": "[parameters('enableDefenderForAI')]"
+    },
+    "DEEPSEEK_ENABLED": {
+      "type": "bool",
+      "value": "[parameters('enableDeepSeek')]"
+    },
+    "AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME": {
+      "type": "string",
+      "value": "[if(parameters('enableDeepSeek'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('deepseek-{0}', variables('resourceToken'))), '2025-04-01').outputs.foundryAccountName.value, '')]"
+    },
+    "AZURE_OPENAI_DEEPSEEK_BASE_URL": {
+      "type": "string",
+      "value": "[if(parameters('enableDeepSeek'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('deepseek-{0}', variables('resourceToken'))), '2025-04-01').outputs.foundryAccountOpenAIBaseUrl.value, '')]"
+    },
+    "AZURE_OPENAI_DEEPSEEK_DEPLOYMENT": {
+      "type": "string",
+      "value": "[if(parameters('enableDeepSeek'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('deepseek-{0}', variables('resourceToken'))), '2025-04-01').outputs.deploymentName.value, '')]"
     }
   }
 }

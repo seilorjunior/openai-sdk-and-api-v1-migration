@@ -4,3 +4,8 @@ infra:
   provider: bicep
   path: infra
   module: main
+services:
+  migration-mcp:
+    project: .
+    host: appservice
+    language: py

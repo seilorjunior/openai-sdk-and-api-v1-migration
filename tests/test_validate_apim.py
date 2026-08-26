@@ -75,6 +75,50 @@ class ValidateApimTests(unittest.TestCase):
         self.assertIn("deployment-based OpenAI route", checks)
         self.assertIn("dated api-version", checks)
 
+    def test_documented_mcp_contract_with_expected_tools_passes(self):
+        current = {
+            "api": {
+                "properties": {
+                    "apiType": "mcp",
+                    "type": "mcp",
+                    "mcpProperties": {
+                        "transportType": "streamable",
+                        "endpoints": [{"name": "message", "uriTemplate": "/mcp"}],
+                    },
+                }
+            },
+            "runtimeMcpTools": [
+                "list_migration_rules",
+                "scan_migration_sources",
+                "evaluate_retirement_readiness",
+            ],
+        }
+
+        findings = validate_snapshot(current)
+
+        self.assertEqual(["PASS"], [finding.severity for finding in findings])
+
+    def test_live_stamp_mcp_shape_and_empty_tools_are_actionable_errors(self):
+        current = {
+            "api": {
+                "properties": {
+                    "apiType": "mcp",
+                    "type": "mcp",
+                    "mcpProperties": {
+                        "endpoints": {"message": {"name": "message", "uriTemplate": "/mcp"}},
+                    },
+                }
+            },
+            "runtimeMcpTools": [],
+        }
+
+        checks = {finding.check for finding in validate_snapshot(current) if finding.severity == "ERROR"}
+
+        self.assertEqual(
+            {"MCP transport contract", "MCP endpoint contract", "MCP tool discovery"},
+            checks,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

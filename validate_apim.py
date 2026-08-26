@@ -4,21 +4,32 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 
 LEGACY_PATTERNS = {
     "azure-ai-inference /models route": re.compile(r"(?:services\.ai\.azure\.com)?/models(?:/|\b)", re.I),
     "dated api-version": re.compile(r"api-version(?:=|&amp;|%3[dD])", re.I),
     "deployment-based OpenAI route": re.compile(r"/openai/deployments/", re.I),
     "legacy Microsoft Entra scope": re.compile(r"https://cognitiveservices\.azure\.com(?:/\.default)?", re.I),
+}
+
+EXPECTED_MCP_TOOLS = {
+    "evaluate_retirement_readiness",
+    "list_migration_rules",
+    "scan_migration_sources",
 }
 
 
@@ -55,7 +66,7 @@ def get_apim_snapshot(resource_group: str, service_name: str, api_id: str) -> di
         f"/providers/Microsoft.ApiManagement/service/{service_name}"
     )
     api_resource_id = f"{service_id}/apis/{api_id}"
-    api = get_resource(api_resource_id)
+    api = get_resource(api_resource_id, "2025-09-01-preview")
     try:
         api_policy = get_resource(f"{api_resource_id}/policies/policy", "2024-05-01")
     except RuntimeError as error:
@@ -137,6 +148,10 @@ def iter_text(snapshot: dict[str, Any]) -> Iterable[tuple[str, str]]:
 
 
 def validate_snapshot(snapshot: dict[str, Any]) -> list[Finding]:
+    api_properties = snapshot.get("api", {}).get("properties", {})
+    if api_properties.get("apiType") == "mcp" or api_properties.get("type") == "mcp":
+        return validate_mcp_snapshot(snapshot)
+
     findings: list[Finding] = []
     all_text = list(iter_text(snapshot))
 
@@ -173,6 +188,73 @@ def validate_snapshot(snapshot: dict[str, Any]) -> list[Finding]:
     return findings
 
 
+def validate_mcp_snapshot(snapshot: dict[str, Any]) -> list[Finding]:
+    findings: list[Finding] = []
+    properties = snapshot.get("api", {}).get("properties", {})
+    mcp_properties = properties.get("mcpProperties", {})
+    transport_type = mcp_properties.get("transportType")
+    endpoints = mcp_properties.get("endpoints")
+
+    if transport_type != "streamable":
+        findings.append(
+            Finding(
+                "ERROR",
+                "MCP transport contract",
+                "APIM did not retain mcpProperties.transportType='streamable'. This indicates the regional APIM stamp has not adopted the documented 2025-09-01-preview passthrough contract.",
+            )
+        )
+
+    if not isinstance(endpoints, list):
+        findings.append(
+            Finding(
+                "ERROR",
+                "MCP endpoint contract",
+                "mcpProperties.endpoints is not the documented array shape. A dictionary is a temporary live-stamp compatibility shape and does not prove passthrough tool discovery works.",
+            )
+        )
+    elif not any(
+        endpoint.get("name") == "message" and endpoint.get("uriTemplate") == "/mcp"
+        for endpoint in endpoints
+        if isinstance(endpoint, dict)
+    ):
+        findings.append(Finding("ERROR", "MCP message endpoint", "No message endpoint with uriTemplate '/mcp' was found."))
+
+    runtime_tools = snapshot.get("runtimeMcpTools")
+    if runtime_tools is not None:
+        advertised_tools = {str(tool) for tool in runtime_tools}
+        if not advertised_tools:
+            findings.append(
+                Finding(
+                    "ERROR",
+                    "MCP tool discovery",
+                    "APIM initialized the MCP session but tools/list returned zero tools. Validate the same backend directly; if it advertises tools, open an Azure support case for the APIM preview rollout.",
+                )
+            )
+        else:
+            missing_tools = EXPECTED_MCP_TOOLS - advertised_tools
+            unexpected_tools = advertised_tools - EXPECTED_MCP_TOOLS
+            if missing_tools or unexpected_tools:
+                details = []
+                if missing_tools:
+                    details.append(f"missing: {', '.join(sorted(missing_tools))}")
+                if unexpected_tools:
+                    details.append(f"unexpected: {', '.join(sorted(unexpected_tools))}")
+                findings.append(Finding("ERROR", "MCP tool contract", "; ".join(details)))
+
+    if not findings:
+        findings.append(Finding("PASS", "MCP APIM configuration", "The APIM MCP resource contract is complete."))
+    return findings
+
+
+async def discover_mcp_tools(url: str, subscription_key: str) -> list[str]:
+    headers = {"Ocp-Apim-Subscription-Key": subscription_key}
+    async with streamablehttp_client(url, headers=headers) as (read_stream, write_stream, _):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            result = await session.list_tools()
+    return [tool.name for tool in result.tools]
+
+
 def print_report(findings: list[Finding]) -> None:
     for finding in findings:
         print(f"[{finding.severity}] {finding.check}: {finding.message}")
@@ -189,6 +271,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--service-name", help="APIM service name.")
     parser.add_argument("--api-id", help="APIM API identifier (not display name).")
     parser.add_argument("--export", type=Path, help="Write the sanitized APIM snapshot to this file.")
+    parser.add_argument("--mcp-url", help="Run MCP initialize and tools/list against this APIM URL.")
+    parser.add_argument(
+        "--mcp-key-env",
+        default="APIM_SUBSCRIPTION_KEY",
+        help="Environment variable containing the APIM subscription key (default: APIM_SUBSCRIPTION_KEY).",
+    )
     return parser.parse_args()
 
 
@@ -202,6 +290,13 @@ def main() -> int:
             print(f"Missing required argument(s): {', '.join('--' + name.replace('_', '-') for name in missing)}", file=sys.stderr)
             return 2
         snapshot = get_apim_snapshot(args.resource_group, args.service_name, args.api_id)
+
+    if args.mcp_url:
+        subscription_key = os.environ.get(args.mcp_key_env)
+        if not subscription_key:
+            print(f"Environment variable {args.mcp_key_env} is required with --mcp-url.", file=sys.stderr)
+            return 2
+        snapshot["runtimeMcpTools"] = asyncio.run(discover_mcp_tools(args.mcp_url, subscription_key))
 
     if args.export:
         args.export.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")

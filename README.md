@@ -13,6 +13,7 @@ This proof of concept addresses the Azure AI Inference SDK retirement announced 
 5. APIM with one dual-mode chat operation, managed identity, rate limiting, retries, product/subscription access, logs, and failure alerts.
 6. Deterministic pull-request gates and protected manual live tests.
 7. Validators and operational reports that do not export keys, prompts, or responses.
+8. A read-only migration toolkit served over Streamable HTTP MCP through APIM.
 
 ## Architecture
 
@@ -73,6 +74,7 @@ The dual policy applies only to the existing chat operation. Other APIM operatio
 | `load_test.py` | Bounded load test with client reuse, optional warm-up, and latency/token/cost reporting. |
 | `migration_scan.py` | Fleet scanner for legacy SDKs, clients, endpoints, and dated API versions. |
 | `retirement_report.py` | Fail-closed retirement evidence from correlated Application Insights telemetry. |
+| `services/migration_mcp/` | Bounded FastMCP service hosted on Azure App Service. |
 | `validate_apim.py` | Live or offline APIM configuration validation with secret redaction. |
 | `RUNBOOK.md` | Alert triage, rollback, key recovery, scaling, private networking, cleanup, and escalation procedures. |
 | `pyproject.toml` | pytest, Ruff, and mypy configuration. |
@@ -118,6 +120,62 @@ python .\migration_scan.py C:\Git\app-one --format sarif --output migration-scan
 
 The scanner reports `azure-ai-inference`, `ChatCompletionsClient`, `/models`, dated `api-version` values, `AzureOpenAI(`, and `/openai/deployments/` as rules `AOAI001` through `AOAI006`. It accepts repeatable `--exclude` directory names and ignores common virtual environments, caches, build output, and dependency folders by default. Use `--fail-on-findings` in consumer repositories after approving their baseline. This POC intentionally retains a legacy client and route as the comparison control, so its own CI preserves SARIF evidence without treating expected findings as a failure.
 
+## Run the migration MCP server
+
+The hosted toolkit exposes three read-only tools: `list_migration_rules`, `scan_migration_sources`, and `evaluate_retirement_readiness`. Source scanning accepts caller-supplied virtual paths and text only. It rejects duplicate paths, more than 25 files, files over 64 KiB, and combined source input over 256 KiB. The server never reads caller-selected filesystem paths, runs Azure CLI, fetches URLs, clones repositories, changes files, or deploys resources.
+
+### How deprecated API analysis works
+
+`scan_migration_sources` performs deterministic static analysis over the source text included in the MCP request. The caller submits one or more objects containing a virtual `path` and `source`; the tool does not discover or open files by itself. After validating the file count, unique paths, and UTF-8 byte limits, it scans each source line with the same stable regular-expression rules used by `migration_scan.py`:
+
+| Rule | Migration signal |
+| --- | --- |
+| `AOAI001` | A dependency on `azure-ai-inference`. |
+| `AOAI002` | Use of `ChatCompletionsClient`. |
+| `AOAI003` | A `/models` endpoint. |
+| `AOAI004` | A dated Azure OpenAI `api-version`. |
+| `AOAI005` | Construction of an `AzureOpenAI(...)` client. |
+| `AOAI006` | An `/openai/deployments/` endpoint. |
+
+For example, a caller can submit this virtual file:
+
+```json
+{
+  "path": "legacy_client.py",
+  "source": "from azure.ai.inference import ChatCompletionsClient\nclient = ChatCompletionsClient(...)\nurl = endpoint + \"/openai/deployments/chat/completions?api-version=2024-10-21\"\n"
+}
+```
+
+This source produces migration findings for `ChatCompletionsClient`, the dated API version, and the deployment-scoped endpoint. Each regular-expression match becomes a structured finding with its rule, virtual path, one-based line and column, message, and a source excerpt:
+
+```json
+{
+  "rule_id": "AOAI002",
+  "message": "Legacy ChatCompletionsClient usage",
+  "path": "legacy_client.py",
+  "line": 1,
+  "column": 32,
+  "excerpt": "from azure.ai.inference import ChatCompletionsClient"
+}
+```
+
+The report also contains `source_count`, `source_bytes`, `finding_count`, `counts_by_rule`, and the complete sorted `findings` list. A finding is a migration-review signal, not proof that the matched API is unsupported in every context. The rules are curated in this repository and are not retrieved from Azure or Microsoft documentation at request time. Zero findings means only that these six patterns were absent from the submitted text; it does not prove that an application is fully compatible with API v1. Review findings against the application's dependencies, runtime behavior, and current Microsoft lifecycle documentation before changing production code.
+
+`evaluate_retirement_readiness` is a separate evidence gate. It does not scan source code. It evaluates caller-supplied Application Insights aggregate rows for the 7-day, 14-day, and 30-day windows together with success, latency, recency, parity, rollback, and owner-approval criteria. Use source findings to locate migration work and use retirement readiness to decide whether operational evidence supports removing the legacy route.
+
+Run it locally with a private backend key:
+
+```powershell
+$env:MCP_BACKEND_KEY = '<at-least-32-character-local-key>'
+python -m uvicorn services.migration_mcp.app:app --host 127.0.0.1 --port 8000
+```
+
+The health endpoint is `http://127.0.0.1:8000/health`. Streamable HTTP MCP is at `http://127.0.0.1:8000/mcp` and requires `x-mcp-backend-key` when called directly.
+
+In Azure, the intended client endpoint is the non-secret `MCP_APIM_URL` output, ending in `/migration-mcp/mcp`, with the existing APIM product key in `Ocp-Apim-Subscription-Key`. APIM applies the per-subscription rate limit and injects the private backend key. Do not send or disclose `MCP_BACKEND_KEY` to MCP clients.
+
+> **APIM MCP preview limitation (verified August 26, 2026):** The deployed App Service is healthy and directly advertises all three tools. APIM subscription enforcement and MCP initialization also succeed, but `tools/list` through the Central US Developer/STV2 gateway currently returns zero tools. The regional stamp rejects the documented endpoint-array contract, requires the temporary dictionary shape in Bicep, and omits `transportType` when the API is read back. Registering `Microsoft.ApiManagement` did not change the behavior. Treat the APIM URL as blocked for MCP clients until all validation gates in `RUNBOOK.md` pass; do not add static REST-backed tools as a workaround.
+
 ## Provision with Azure Developer CLI
 
 The project includes `azd`-compatible Bicep that creates an isolated environment with Azure OpenAI, a `gpt-4.1-mini` deployment, APIM Developer, a managed identity, Application Insights, Log Analytics, alerts, and RBAC. Microsoft Defender for AI Services and the separate DeepSeek deployment are disabled by default because they introduce subscription-wide billing or consume model quota.
@@ -130,6 +188,10 @@ azd env set AZURE_LOCATION 'brazilsouth'
 azd env set APIM_LOCATION 'centralus'
 azd env set APIM_PUBLISHER_EMAIL '<publisher-email>'
 azd env set TELEMETRY_READER_PRINCIPAL_ID '<telemetry-reader-object-id>'
+$mcpBackendKeyBytes = [byte[]]::new(48)
+[Security.Cryptography.RandomNumberGenerator]::Fill($mcpBackendKeyBytes)
+azd env set MCP_BACKEND_KEY ([Convert]::ToBase64String($mcpBackendKeyBytes))
+Remove-Variable mcpBackendKeyBytes
 # Explicit opt-in: enables a billable subscription-wide security plan.
 azd env set ENABLE_DEFENDER_FOR_AI true
 azd provision
@@ -156,13 +218,15 @@ The deployment also accepts these optional `azd` settings; the values shown are 
 | `AZURE_OPENAI_MODEL_NAME` | `gpt-4.1-mini` | Model deployed by Azure OpenAI. |
 | `AZURE_OPENAI_MODEL_VERSION` | `2025-04-14` | Model version. |
 | `AZURE_OPENAI_DEPLOYMENT_SKU` | `GlobalStandard` | Deployment SKU. |
-| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `4990` | Point-in-time maximum scale target for the existing `gpt-4.1-mini` Global Standard deployment in Brazil South; recheck capacity before provisioning. |
+| `AZURE_OPENAI_DEPLOYMENT_CAPACITY` | `10` | Azure OpenAI deployment capacity preserved for this POC. |
 | `APIM_SKU_NAME` / `APIM_CAPACITY` | `Developer` / `1` | APIM tier and units. |
 | `APIM_RATE_LIMIT_CALLS_PER_MINUTE` | `60` | Per-subscription or caller-IP requests allowed each minute. |
 | `APIM_BACKEND_RETRY_COUNT` / `APIM_BACKEND_RETRY_INTERVAL_SECONDS` | `2` / `1` | APIM retries and initial interval for backend `5xx` responses only. |
 | `APIM_TELEMETRY_SAMPLING_PERCENTAGE` | `100` | Percentage of APIM request telemetry sent to Application Insights. |
 | `APIM_FAILED_REQUESTS_ALERT_THRESHOLD` | `5` | Failures in five minutes that trigger the alert. |
 | `APIM_ALERT_EMAIL` | publisher email | Alert recipient when different from the APIM publisher. |
+| `MCP_APP_SERVICE_PLAN_SKU` | `B1` | Linux App Service plan used by the migration MCP backend. |
+| `MCP_BACKEND_KEY` | required secret | APIM-to-App-Service shared key; generate it and never commit or output it. |
 | `ENABLE_DEFENDER_FOR_AI` | `false` | Enables the billable Defender for AI Services `Standard` plan across the subscription. |
 | `ENABLE_DEEPSEEK` | `false` | Creates a separate Foundry account and DeepSeek deployment. |
 | `AZURE_OPENAI_DEEPSEEK_ACCOUNT_NAME` | generated | Optional globally unique Foundry account name. |
@@ -174,9 +238,7 @@ The deployment also accepts these optional `azd` settings; the values shown are 
 | `PRIVATE_ENDPOINT_SUBNET_RESOURCE_ID` | empty | Private endpoint subnet; required with private networking. |
 | `VIRTUAL_NETWORK_RESOURCE_ID` | empty | VNet linked to the Azure OpenAI private DNS zone. |
 
-The `4990` capacity default is the scale target for the existing deployment in this subscription, calculated on August 21, 2026 as its current `10` units plus `4980` additional units reported by the Azure Model Capacities API. Each unit of this `gpt-4.1-mini` Global Standard deployment provides 1,000 TPM and 1 RPM, so the target represents 4.99 million TPM and 4,990 RPM.
-
-Capacity availability changes with subscription quota, regional service capacity, and other deployments. Before provisioning, use the Model Capacities API procedure in `RUNBOOK.md`. When scaling this same deployment, the maximum target is its current capacity plus `availableCapacity`. For a new deployment, the target cannot exceed `availableCapacity`. Set a lower value when the API reports less capacity:
+Capacity availability changes with subscription quota, regional service capacity, and other deployments. This repository intentionally keeps the deployment at `10`; any increase requires a separate capacity review and explicit change. Use the Model Capacities API procedure in `RUNBOOK.md` before proposing a new value.
 
 ```powershell
 azd env set AZURE_OPENAI_DEPLOYMENT_CAPACITY '<available-capacity>'

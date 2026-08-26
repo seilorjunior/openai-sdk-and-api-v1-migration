@@ -19,6 +19,7 @@ source = [
     "load_test",
     "migration_scan",
     "retirement_report",
+    "services.migration_mcp.app",
     "validate_apim",
 ]
 
@@ -48,6 +49,7 @@ known-first-party = [
     "load_test",
     "migration_scan",
     "retirement_report",
+    "services.migration_mcp",
     "validate_apim",
 ]
 
@@ -60,6 +62,7 @@ files = [
     "load_test.py",
     "migration_scan.py",
     "retirement_report.py",
+    "services/migration_mcp/app.py",
     "validate_apim.py",
 ]
 ignore_missing_imports = true

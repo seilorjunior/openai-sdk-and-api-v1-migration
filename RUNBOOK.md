@@ -28,6 +28,29 @@ The pytest suite is offline and mocks SDK, Azure CLI, and process boundaries. It
 
 Live smoke, parity, load, telemetry, and retirement checks remain separate because they require deployed Azure resources and protected credentials. Run `scripts/validate-live-migration.ps1` after the deterministic gate passes.
 
+## Migration MCP validation
+
+Validate the MCP path as four separate gates. A successful health check or MCP initialization does not prove APIM tool discovery.
+
+1. Confirm `https://<web-app>.azurewebsites.net/health` returns `{"status":"ok"}`.
+2. Call the App Service `/mcp` endpoint with `x-mcp-backend-key` from a protected operator environment and confirm the three expected tools. Never attach that key to evidence.
+3. Confirm the APIM endpoint rejects a missing `Ocp-Apim-Subscription-Key`, then initializes with a valid key.
+4. Run the resource-contract and live tool-discovery validator:
+
+   ```powershell
+   $env:APIM_SUBSCRIPTION_KEY = '<protected-product-key>'
+   python .\validate_apim.py `
+     --resource-group '<resource-group>' `
+     --service-name '<apim-service>' `
+     --api-id '<migration-mcp-api-id>' `
+     --mcp-url 'https://<apim-service>.azure-api.net/migration-mcp/mcp'
+   Remove-Item Env:APIM_SUBSCRIPTION_KEY
+   ```
+
+The command must report the documented endpoint array, retained `transportType: streamable`, and exactly `list_migration_rules`, `scan_migration_sources`, and `evaluate_retirement_readiness`. On the Central US Developer/STV2 stamp tested August 26, 2026, ARM instead returns a dictionary endpoint shape without `transportType`, and APIM `tools/list` returns zero tools even though the backend receives `ListToolsRequest` and answers successfully. `Microsoft.ApiManagement` provider registration did not resolve the mismatch.
+
+Do not change production to reproduce this condition. Before replacing the dictionary workaround in Bicep, create a disposable MCP API and prove that the documented array contract is accepted and retained on ARM GET, then prove `tools/list` through APIM. For Azure support, include UTC timestamps, subscription/resource group/APIM/API identifiers, region/SKU/platform version, redacted initialize and `tools/list` responses, the ARM round-trip shape, direct-backend tool-list success, and sanitized App Service evidence that `ListToolsRequest` returned HTTP 200. Exclude all subscription and backend keys.
+
 ## Failed-request alert triage
 
 The default alert fires when APIM records more than five failed requests in five minutes. Query Application Insights without request or response bodies:
@@ -108,8 +131,8 @@ $capacity.value |
 ```
 
 1. Interpret `availableCapacity` as additional capacity that can be allocated now. For the existing deployment, add its current capacity to this value to calculate the maximum scale target. For a new deployment, use no more than `availableCapacity`.
-2. The checked-in `4990` target was calculated on August 21, 2026 from `10` existing units plus `4980` available units. It represents 4.99 million TPM and 4,990 RPM for `gpt-4.1-mini` Global Standard. Treat it as a point-in-time subscription-specific value.
-3. Update the azd environment value, run `azd provision`, and repeat smoke, parity, and bounded load checks.
+2. The checked-in capacity is intentionally `10`. Treat a scale-up as a separate reviewed change rather than applying the maximum available quota automatically.
+3. After an approved change, update the azd environment value, run `azd provision`, and repeat smoke, parity, and bounded load checks.
 4. Increase APIM limits incrementally. Keep client retries responsible for `429`; APIM retries only transient `5xx` responses.
 
 The Developer APIM SKU has no production SLA. Select a production SKU and capacity before serving customer traffic.

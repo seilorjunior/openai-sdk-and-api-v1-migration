@@ -10,6 +10,15 @@ import migration_scan
 
 
 class MigrationScanTests(unittest.TestCase):
+    def test_scan_text_detects_findings_without_filesystem_access(self) -> None:
+        findings = migration_scan.scan_text(
+            "client = AzureOpenAI()\nurl = '/openai/deployments/chat/completions'\n",
+            "src/client.py",
+        )
+
+        self.assertEqual([finding.rule_id for finding in findings], ["AOAI005", "AOAI006"])
+        self.assertEqual({finding.path for finding in findings}, {"src/client.py"})
+
     def test_scan_detects_legacy_dependency_client_and_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
