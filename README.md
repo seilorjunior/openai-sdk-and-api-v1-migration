@@ -18,38 +18,38 @@ This proof of concept addresses the Azure AI Inference SDK retirement announced 
 
 ```mermaid
 flowchart LR
-  subgraph Clients[Clients and validation]
-    App[Python application<br/>OpenAI SDK]
-    Gate[GitHub Actions and operator scripts<br/>smoke, parity, load, retirement gates]
+  subgraph Clients["Clients and validation"]
+    App["Python application<br/>OpenAI SDK"]
+    Gate["GitHub Actions and operator scripts<br/>smoke, parity, load, retirement gates"]
   end
 
-  subgraph Runtime[Azure runtime]
-    APIM[API Management<br/>subscription access, rate limits, policies]
-    Router{Chat mode policy<br/>X-API-Mode}
-    Identity[User-assigned managed identity<br/>backend and telemetry authentication]
-    OpenAI[Azure OpenAI<br/>single model deployment]
+  subgraph Runtime["Azure runtime"]
+    APIM["API Management<br/>subscription access, rate limits, policies"]
+    Router{"Chat mode policy<br/>X-API-Mode"}
+    Identity["User-assigned managed identity<br/>backend and telemetry authentication"]
+    OpenAI["Azure OpenAI<br/>single model deployment"]
   end
 
-  subgraph Observability[Observability]
-    Insights[Application Insights<br/>correlated API telemetry]
-    Logs[(Log Analytics workspace<br/>gateway logs and retirement queries)]
-    Alert[Azure Monitor alert<br/>failed-request notification]
+  subgraph Observability["Observability"]
+    Insights["Application Insights<br/>correlated API telemetry"]
+    Logs[("Log Analytics workspace<br/>gateway logs and retirement queries")]
+    Alert["Azure Monitor alert<br/>failed-request notification"]
   end
 
-  App -->|calls v1 directly with Microsoft Entra authentication| OpenAI
-  App -->|calls gateway with an APIM subscription key| APIM
-  Gate -->|validates deployed routes and evidence| APIM
-  Gate -->|runs direct capability checks| OpenAI
-  APIM -->|routes the chat operation| Router
-  Router -->|missing or v1: /openai/v1/chat/completions| OpenAI
-  Router -->|legacy: versioned deployment endpoint| OpenAI
-  APIM -.->|uses for backend and logger tokens| Identity
-  Identity -->|Cognitive Services User RBAC| OpenAI
-  Identity -->|Monitoring Metrics Publisher RBAC| Insights
-  APIM -->|emits API diagnostics without bodies| Insights
-  Insights -->|stores workspace-based telemetry| Logs
-  APIM -->|exports platform logs and metrics| Logs
-  APIM -->|feeds the failed-request metric| Alert
+  App -->|"calls v1 directly with Microsoft Entra authentication"| OpenAI
+  App -->|"calls gateway with an APIM subscription key"| APIM
+  Gate -->|"validates deployed routes and evidence"| APIM
+  Gate -->|"runs direct capability checks"| OpenAI
+  APIM -->|"routes the chat operation"| Router
+  Router -->|"missing or v1: /openai/v1/chat/completions"| OpenAI
+  Router -->|"legacy: versioned deployment endpoint"| OpenAI
+  APIM -.->|"uses for backend and logger tokens"| Identity
+  Identity -->|"Cognitive Services User RBAC"| OpenAI
+  Identity -->|"Monitoring Metrics Publisher RBAC"| Insights
+  APIM -->|"emits API diagnostics without bodies"| Insights
+  Insights -->|"stores workspace-based telemetry"| Logs
+  APIM -->|"exports platform logs and metrics"| Logs
+  APIM -->|"feeds the failed-request metric"| Alert
 ```
 
 Arrows show request, validation, telemetry, or authorization flow. All deployed request paths reach the same model deployment. The optional private-networking mode places APIM in a VNet and reaches Azure OpenAI through a private endpoint and private DNS; those network resources are omitted above to keep the routing decision readable.

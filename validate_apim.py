@@ -5,17 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
 import sys
-import urllib.error
-import urllib.request
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+
 
 LEGACY_PATTERNS = {
     "azure-ai-inference /models route": re.compile(r"(?:services\.ai\.azure\.com)?/models(?:/|\b)", re.I),
@@ -23,108 +20,6 @@ LEGACY_PATTERNS = {
     "deployment-based OpenAI route": re.compile(r"/openai/deployments/", re.I),
     "legacy Microsoft Entra scope": re.compile(r"https://cognitiveservices\.azure\.com(?:/\.default)?", re.I),
 }
-
-UNIFIED_CHAT_POLICY_MARKERS = (
-    "x-api-mode",
-    "migration-api-mode",
-    "context.variables[",
-    "openai-v1-migration",
-    "api_mode",
-    "request_id",
-    "/openai/v1/chat/completions",
-    "/openai/deployments/",
-    "chat/completions?api-version=2024-10-21",
-    "https://ai.azure.com",
-    "https://cognitiveservices.azure.com",
-    "invalid_api_mode",
-)
-
-REDACTED = "***REDACTED***"
-
-# Field/key names that are always treated as secret regardless of value shape,
-# such as backend credential containers and connection secrets. Note that
-# generic names like "header", "query", "parameter", or "authorization" are
-# deliberately NOT included here on their own, since they appear throughout
-# ARM/APIM resources in non-secret contexts (policy metadata, route
-# parameters, etc.). Instead, "credentials" acts as a trigger key: once a
-# dict is reached under a "credentials" key, force_secret propagates to all
-# of its nested content (including any authorization/header/query/parameter
-# fields), so backend credential material is still fully redacted.
-SECRET_FIELD_NAMES = {
-    "credentials",
-    "certificateid",
-    "certificateids",
-    "clientsecret",
-    "client_secret",
-    "accesstoken",
-    "access_token",
-    "connectionstring",
-    "connection_string",
-    "subscriptionkey",
-    "subscription_key",
-    "ocp-apim-subscription-key",
-    "api-key",
-    "apikey",
-    "password",
-    "secret",
-    "sharedaccesskey",
-    "accountkey",
-    "primarykey",
-    "secondarykey",
-}
-
-# Inline text patterns that redact secret material embedded in free-form
-# strings such as policy XML, URLs, or ARM error messages, while preserving
-# enough surrounding context to keep findings readable.
-TEXT_SECRET_PATTERNS = [
-    re.compile(r"(authorization\s*[:=]\s*[\"']?)(bearer|basic)?\s*([A-Za-z0-9\-_.~+/]{8,}=*)", re.I),
-    re.compile(r"(ocp-apim-subscription-key\s*[:=]\s*[\"']?)([^\s\"'<>&]{4,})", re.I),
-    re.compile(r"(api[-_]?key\s*[:=]\s*[\"']?)([^\s\"'<>&]{4,})", re.I),
-    re.compile(r"(sharedaccesskey\s*=\s*)([^;\"'<>\s]{4,})", re.I),
-    re.compile(r"(accountkey\s*=\s*)([^;\"'<>\s]{4,})", re.I),
-    re.compile(r"([?&]sig=)([^&\"'<>\s]{4,})", re.I),
-    re.compile(r"(client[-_]?secret\s*[:=]\s*[\"']?)([^\s\"'<>&]{4,})", re.I),
-]
-
-
-def redact_text(value: str) -> str:
-    """Redact secret-shaped substrings while keeping the surrounding text."""
-
-    redacted = value
-    for pattern in TEXT_SECRET_PATTERNS:
-        redacted = pattern.sub(lambda match: f"{match.group(1)}{REDACTED}", redacted)
-    return redacted
-
-
-def redact_value(key: str | None, value: Any, force_secret: bool = False) -> Any:
-    normalized_key = (key or "").strip().lower()
-    is_secret_context = force_secret or normalized_key in SECRET_FIELD_NAMES
-    if isinstance(value, str):
-        if is_secret_context:
-            return REDACTED
-        return redact_text(value)
-    if isinstance(value, dict):
-        return {name: redact_value(name, item, is_secret_context) for name, item in value.items()}
-    if isinstance(value, list):
-        return [redact_value(key, item, is_secret_context) for item in value]
-    return value
-
-
-def sanitize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of an APIM snapshot with secret material redacted.
-
-    This is applied before writing any snapshot to disk (``--export``) and
-    before including excerpts in validation findings, so authorization
-    headers, subscription keys, named-value secrets, backend credentials,
-    tokens, and connection strings are never exposed.
-    """
-
-    sanitized = redact_value(None, snapshot)
-    for named_value in sanitized.get("namedValues", []) or []:
-        properties = named_value.get("properties", {}) if isinstance(named_value, dict) else {}
-        if isinstance(properties, dict) and properties.get("secret") and "value" in properties:
-            properties["value"] = REDACTED
-    return sanitized
 
 
 @dataclass(frozen=True)
@@ -143,48 +38,18 @@ def find_azure_cli() -> str:
 
 def run_az_json(arguments: list[str]) -> Any:
     command = [find_azure_cli(), *arguments, "--output", "json", "--only-show-errors"]
-    environment = os.environ.copy()
-    environment["PYTHONUTF8"] = "1"
-    result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", env=environment, check=False)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise RuntimeError(redact_text(result.stderr.strip()) or f"Azure CLI failed: {' '.join(command)}")
-    return json.loads(result.stdout.lstrip("\ufeff"))
+        raise RuntimeError(result.stderr.strip() or f"Azure CLI failed: {' '.join(command)}")
+    return json.loads(result.stdout)
 
 
 def get_resource(resource_id: str, api_version: str = "2024-05-01") -> dict[str, Any]:
     return run_az_json(["rest", "--method", "get", "--url", f"{resource_id}?api-version={api_version}"])
 
 
-def get_policy(
-    resource_id: str, api_version: str = "2024-05-01", subscription_id: str | None = None
-) -> dict[str, Any]:
-    token_arguments = ["account", "get-access-token", "--resource", "https://management.azure.com/"]
-    if subscription_id:
-        token_arguments.extend(["--subscription", subscription_id])
-    token = run_az_json(token_arguments)["accessToken"]
-    authorization_header = "Bearer " + token
-    request = urllib.request.Request(
-        f"https://management.azure.com{resource_id}?api-version={api_version}",
-        headers={"Authorization": authorization_header},
-    )
-    try:
-        with urllib.request.urlopen(request) as response:
-            return json.loads(response.read().decode("utf-8-sig"))
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"ARM request failed with HTTP {error.code}") from error
-
-
-def is_resource_not_found(error: RuntimeError) -> bool:
-    message = str(error).lower()
-    return "404" in message or "resourcenotfound" in message
-
-
-def get_apim_snapshot(
-    resource_group: str, service_name: str, api_id: str, subscription_id: str | None = None
-) -> dict[str, Any]:
-    subscription_id = subscription_id or os.getenv("AZURE_SUBSCRIPTION_ID") or run_az_json(
-        ["account", "show", "--query", "id"]
-    )
+def get_apim_snapshot(resource_group: str, service_name: str, api_id: str) -> dict[str, Any]:
+    subscription_id = run_az_json(["account", "show", "--query", "id"])
     service_id = (
         f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}"
         f"/providers/Microsoft.ApiManagement/service/{service_name}"
@@ -192,9 +57,9 @@ def get_apim_snapshot(
     api_resource_id = f"{service_id}/apis/{api_id}"
     api = get_resource(api_resource_id)
     try:
-        api_policy = get_policy(f"{api_resource_id}/policies/policy", "2024-05-01", subscription_id)
+        api_policy = get_resource(f"{api_resource_id}/policies/policy", "2024-05-01")
     except RuntimeError as error:
-        if not is_resource_not_found(error):
+        if "404" not in str(error):
             raise
         api_policy = {"properties": {"value": ""}}
     operations = run_az_json(
@@ -213,9 +78,9 @@ def get_apim_snapshot(
         operation_id = operation["name"]
         policy_id = f"{api_resource_id}/operations/{operation_id}/policies/policy"
         try:
-            policy = get_policy(policy_id, subscription_id=subscription_id)
+            policy = get_resource(policy_id)
         except RuntimeError as error:
-            if not is_resource_not_found(error):
+            if "404" not in str(error):
                 raise
             policy = {"properties": {"value": ""}}
         operation_details.append({"operation": operation, "policy": policy})
@@ -239,7 +104,7 @@ def get_apim_snapshot(
             "--url",
             f"{service_id}/namedValues?api-version=2024-05-01",
             "--query",
-            "value[].{name:name,properties:{displayName:properties.displayName,secret:properties.secret}}",
+            "value[].{{name:name,properties:{{displayName:properties.displayName,secret:properties.secret}}}}",
         ]
     )
     return {
@@ -276,16 +141,9 @@ def validate_snapshot(snapshot: dict[str, Any]) -> list[Finding]:
     all_text = list(iter_text(snapshot))
 
     for location, value in all_text:
-        normalized_value = value.lower()
-        is_unified_chat_policy = "policy" in location.lower() and all(
-            marker in normalized_value for marker in UNIFIED_CHAT_POLICY_MARKERS
-        )
-        if is_unified_chat_policy:
-            continue
         for description, pattern in LEGACY_PATTERNS.items():
             if pattern.search(value):
-                excerpt = redact_text(value)[:180]
-                findings.append(Finding("ERROR", description, f"{location} contains legacy configuration: {excerpt}"))
+                findings.append(Finding("ERROR", description, f"{location} contains legacy configuration: {value[:180]}"))
 
     combined_policy = "\n".join(value for location, value in all_text if "policy" in location.lower())
     authentication_text = "\n".join(value for location, value in all_text if "policy" in location.lower() or "credentials" in location.lower())
@@ -310,22 +168,6 @@ def validate_snapshot(snapshot: dict[str, Any]) -> list[Finding]:
     if not has_chat_operation:
         findings.append(Finding("ERROR", "chat completions operation", "No chat/completions operation was found."))
 
-    for item in operations:
-        operation = item.get("operation", {})
-        url_template = str(operation.get("properties", {}).get("urlTemplate", "")).lower()
-        policy = str(item.get("policy", {}).get("properties", {}).get("value", ""))
-        normalized_policy = policy.lower()
-        if url_template == "/v1/chat/completions" and "x-api-mode" in normalized_policy:
-            missing_markers = [marker for marker in UNIFIED_CHAT_POLICY_MARKERS if marker not in normalized_policy]
-            if missing_markers:
-                findings.append(
-                    Finding(
-                        "ERROR",
-                        "dual-mode chat operation",
-                        f"Dual-mode chat policy is missing: {', '.join(missing_markers)}.",
-                    )
-                )
-
     if not findings:
         findings.append(Finding("PASS", "OpenAI v1 APIM configuration", "No incompatible configuration was detected."))
     return findings
@@ -346,7 +188,6 @@ def parse_args() -> argparse.Namespace:
     source.add_argument("--resource-group", help="APIM resource group.")
     parser.add_argument("--service-name", help="APIM service name.")
     parser.add_argument("--api-id", help="APIM API identifier (not display name).")
-    parser.add_argument("--subscription-id", help="Azure subscription containing the APIM service.")
     parser.add_argument("--export", type=Path, help="Write the sanitized APIM snapshot to this file.")
     return parser.parse_args()
 
@@ -360,10 +201,10 @@ def main() -> int:
         if missing:
             print(f"Missing required argument(s): {', '.join('--' + name.replace('_', '-') for name in missing)}", file=sys.stderr)
             return 2
-        snapshot = get_apim_snapshot(args.resource_group, args.service_name, args.api_id, args.subscription_id)
+        snapshot = get_apim_snapshot(args.resource_group, args.service_name, args.api_id)
 
     if args.export:
-        args.export.write_text(json.dumps(sanitize_snapshot(snapshot), indent=2), encoding="utf-8")
+        args.export.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     findings = validate_snapshot(snapshot)
     print_report(findings)
     return 1 if any(finding.severity == "ERROR" for finding in findings) else 0
