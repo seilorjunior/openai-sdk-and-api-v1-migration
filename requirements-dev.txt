@@ -6,7 +6,7 @@
 # These are not required to run smoke_test.py, capability_test.py,
 # compare_responses.py, load_test.py, or validate_apim.py against a live
 # environment; they only support local/CI quality checks.
-pytest>=8.0,<10
+pytest>=9.1.1,<10
 pytest-cov>=7.1.0,<8
 ruff>=0.16.3,<1
 mypy>=2.3.1,<3
